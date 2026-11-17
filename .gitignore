@@ -1,0 +1,12 @@
+node_modules/
+.next/
+out/
+.env*
+*.tsbuildinfo
+__pycache__/
+.pytest_cache/
+*.db
+.venv/
+
+*.sqlite3
+*.sqlite3-*
