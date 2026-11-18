@@ -26,4 +26,4 @@ export const seedPatients: Patient[] = [
   { id: 'P-1010', name: 'Malika Usmonova', age: 30, cohort: 'POSTPARTUM', stage: 'Tug‘ruqdan keyin 12 kun', clinic: 'OVaBMU markazi', zone: 'REVIEW', reason: 'Tug‘ruqdan keyingi ko‘rikni mutaxassis baholaydi', vitals: [], doctor: 'rahimova', status: 'Kuzatuv qayd etildi', statusCode: 'POSTPARTUM_FOLLOWED_UP', time: '17-noyabr' },
 
 ];
-export const zoneLabels: Record<Zone, string> = { RED: 'Yuqori xavf', YELLOW: 'Kuzatuv zarur', GREEN: 'Barqaror', REVIEW: 'Tekshirish zarur' };
+export const zoneLabels: Record<Zone, string> = { RED: 'Yuqori xavf', YELLOW: 'Kuzatuv zarur', GREEN: 'Barqaror', REVIEW: 'Baholash kutilmoqda' };

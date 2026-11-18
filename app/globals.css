@@ -49,6 +49,6 @@
 .contact-outcome{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
 .contact-outcome select{max-width:100%;padding:7px;border:1px solid #cdd9e6;background:#fff;border-radius:6px}
 
-.zone-review{background:#176de5;color:#fff}
+.zone-review{background:#edf0f3;color:#374151}
 .registry-tabs{overflow-x:auto}.registry-tab{flex-shrink:0;white-space:nowrap}
 .stat-card.total .stat-bottom{flex-wrap:wrap}

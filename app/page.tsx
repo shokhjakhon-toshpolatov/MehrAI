@@ -937,14 +937,14 @@ export default function Dashboard() {
                     {selected.stage} · {selected.clinic}
                   </p>
                   <span
-                    className={`badge ${selected.zone === "RED" ? "red" : selected.zone === "GREEN" ? "green" : "amber"}`}
+                    className={`badge ${selected.zone === "RED" ? "red" : selected.zone === "GREEN" ? "green" : selected.zone === "REVIEW" ? "zone-review" : "amber"}`}
                   >
                     {selected.zone === "RED"
                       ? "Qizil zona"
                       : selected.zone === "YELLOW"
                         ? "Sariq zona"
                         : selected.zone === "REVIEW"
-                          ? "Tekshirish zarur"
+                          ? "Baholash kutilmoqda"
                           : "Yashil zona"}
                   </span>
                   <div className="detail-block">
