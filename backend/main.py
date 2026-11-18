@@ -137,7 +137,7 @@ def ingest(db, patient_id, observation):
         and prior.get('required_specialty') == risk['required_specialty']
     )
     for task in all_of(db, 'Call'):
-        if task['case_id'] == patient_id and task['status'] in ('READY', 'QUEUED', 'NO_ANSWER', 'RESCHEDULE_REQUESTED'):
+        if task['case_id'] == patient_id and task['status'] in ('READY', 'QUEUED', 'NO_ANSWER', 'RESCHEDULE_REQUESTED', 'DEMO_CALL_QUEUED', 'DEMO_CALL_RUNNING'):
             task['status'] = 'SUPERSEDED'
             put(db, 'Call', task['id'], task)
     if not preserve_visit:
@@ -149,6 +149,9 @@ def ingest(db, patient_id, observation):
     put(db,'Observation',oid,{'id':oid,'patient':patient_id,**observation})
     case = {'id':patient_id,'patient_id':patient_id,'cohort_type':patient['cohort_type'],**risk,
             'observation':observation,'created_at':stamp(),'status':'ROUTINE','assigned_practitioner_id':None}
+    if prior:
+        case['previous_risk_zone'] = prior['risk_zone']
+        case['previous_observation'] = prior['observation']
     if risk['risk_zone'] in ('RED','YELLOW','REVIEW'):
         specialty = risk['required_specialty']
         candidates = [d for d in all_of(db,'PractitionerRole') if specialty in d.get('specialties',[d['specialty']])]
@@ -234,9 +237,25 @@ def process_due(db):
             case['follow_up_required'] = not arrived
             put(db, 'Case', case['id'], case)
             audit(db, case['id'], 'attendance', case['status'])
-    for call in all_of(db,'Call'):
-        if call['status']=='QUEUED' and datetime.fromisoformat(call['scheduled_at'])<=now():
-            call['status']='READY';put(db,'Call',call['id'],call)
+    for call in all_of(db, 'Call'):
+        status = call['status']
+        if status == 'QUEUED' and datetime.fromisoformat(call['scheduled_at']) <= now():
+            call['status'] = 'READY'
+            put(db, 'Call', call['id'], call)
+        elif status in ('DEMO_CALL_QUEUED', 'DEMO_CALL_RUNNING'):
+            if datetime.fromisoformat(call['next_transition_at']) > now():
+                continue
+            case, _ = get(db, 'Case', call['case_id'])
+            if (case['created_at'] != call['case_version'] or case['risk_zone'] != 'RED'
+                    or not case.get('urgent_outreach_approved_at')):
+                call['status'] = 'SUPERSEDED'
+            elif status == 'DEMO_CALL_QUEUED':
+                call.update(status='DEMO_CALL_RUNNING', next_transition_at=stamp(now() + timedelta(seconds=3)))
+                audit(db, case['id'], 'demo_call_started', 'Simulated urgent outreach started')
+            else:
+                call.update(status='DEMO_CALL_COMPLETE', attempts=1)
+                audit(db, case['id'], 'demo_call_completed', 'Simulation completed; no phone was dialed')
+            put(db, 'Call', call['id'], call)
 
 
 async def worker():
@@ -270,10 +289,10 @@ def simulate(scenario:str):
         db.execute('BEGIN IMMEDIATE')
         if scenario=='fast-forward': return [escalate(db,c) for c in all_of(db,'Case') if c['status']=='PENDING_DOCTOR_ACK']
         if scenario not in ('maternal-red','neonatal-red'): raise HTTPException(404,'Unknown scenario')
-        pid='p3' if scenario=='maternal-red' else 'p4'
+        pid='p1' if scenario=='maternal-red' else 'p4'
         patient,_=get(db,'Patient',pid)
         obs={**patient['observation'],'id':str(uuid4())}
-        obs.update({'systolic':165,'diastolic':110,'proteinuria':'++'} if pid=='p3' else {'bilirubin':295,'temperature':38.4})
+        obs.update({'systolic':165,'diastolic':110,'proteinuria':'++'} if pid=='p1' else {'bilirubin':295,'temperature':38.4})
         return ingest(db,pid,obs)
 
 @app.post('/api/cases/{case_id}/explanation')
@@ -308,6 +327,28 @@ def approve_referral(case_id: str, approval: ReferralApproval):
             queue_call(db, case, str(uuid4()))
         return case
 
+@app.post('/api/cases/{case_id}/approve-urgent-outreach')
+def approve_urgent_outreach(case_id: str, approval: ReferralApproval):
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        case, _ = get(db, 'Case', case_id)
+        if case['risk_zone'] != 'RED' or case['status'] != 'DOCTOR_ACCEPTED':
+            raise HTTPException(409, 'Mas’ul shifokor avval shoshilinch holatni ko‘rib chiqishi kerak')
+        if approval.practitioner_id != case.get('assigned_practitioner_id'):
+            raise HTTPException(409, 'Aloqani mas’ul shifokor tasdiqlaydi')
+        if case.get('urgent_outreach_approved_at'):
+            return case
+        case.update(urgent_outreach_approved_at=stamp(), urgent_outreach_approved_by=approval.practitioner_id)
+        put(db, 'Case', case_id, case)
+        call = queue_call(db, case, f"urgent-demo:{case['created_at']}")
+        call.update(status='DEMO_CALL_QUEUED', next_transition_at=stamp(now() + timedelta(seconds=1)))
+        if case['cohort_type'] == 'NEONATAL':
+            call['target_role'] = 'MOTHER_OF_NEWBORN'
+        put(db, 'Call', call['id'], call)
+        audit(db, case_id, 'urgent_outreach_approved', 'Assigned sample clinician approved simulated family call',
+              actor=approval.practitioner_id)
+        return case
+
 def require_planned_contact_approval(case):
     if case['risk_zone'] == 'YELLOW' and (
         not case.get('referral_approved_at') or not case.get('appointment_id')
@@ -335,6 +376,8 @@ def case_action(case_id:str,action:str):
             audit(db, case_id, 'postpartum_follow_up', 'Staff recorded the postpartum follow-up')
             return case
         if action == 'call':
+            if case['risk_zone'] == 'RED':
+                raise HTTPException(409, 'Shoshilinch qo‘ng‘iroq klinik tasdiqdan keyin avtomatik boshlanadi')
             require_planned_contact_approval(case)
             for task in all_of(db, 'Call'):
                 if (task['case_id'] == case_id and task.get('case_version') == case['created_at']
@@ -463,6 +506,8 @@ def record_outreach(call_id: str, attempt: OutreachOutcome):
         key = f'outreach:{call_id}:{attempt.attempt_id}'
         if db.execute('SELECT 1 FROM idempotency WHERE key=?', (key,)).fetchone():
             return call
+        if case['risk_zone'] == 'RED':
+            raise HTTPException(409, 'Shoshilinch aloqa natijasi sinov jarayonida avtomatik qayd etiladi')
         require_planned_contact_approval(case)
         if call['status'] not in ('READY', 'QUEUED', 'NO_ANSWER'):
             raise HTTPException(409, 'Aloqa vazifasi yakunlangan')
@@ -491,6 +536,8 @@ def voice_event(event:VoiceEvent):
         case,_=get(db,'Case',event.case_id)
         key=f'voice:{event.event_id}'
         if db.execute('SELECT 1 FROM idempotency WHERE key=?',(key,)).fetchone(): return case
+        if case['risk_zone'] == 'RED':
+            raise HTTPException(409, 'Shoshilinch holat uchun rejali aloqa natijasi qabul qilinmaydi')
         require_planned_contact_approval(case)
         if event.intent in ('CONFIRMED','RESCHEDULE_REQUESTED'):
             apply_appointment_outcome(db, case, event.intent)

@@ -65,6 +65,9 @@ type ApiCase = {
   appointment_time?: string | null;
   referral_status?: string;
   referral_approved_at?: string;
+  urgent_outreach_approved_at?: string;
+  previous_risk_zone?: Patient["zone"];
+  previous_observation?: Observation;
   follow_up_at?: string;
   follow_up_completed_at?: string;
   assessment_at?: string;
@@ -119,6 +122,9 @@ const targets: Record<string, string> = {
 };
 const callStatuses: Record<string, string> = {
   QUEUED: "Navbatda",
+  DEMO_CALL_QUEUED: "Sinov qo‘ng‘irog‘i navbatda",
+  DEMO_CALL_RUNNING: "Sinov qo‘ng‘irog‘i davom etmoqda",
+  DEMO_CALL_COMPLETE: "Sinov qo‘ng‘irog‘i yakunlandi",
   READY: "Qo‘ng‘iroqqa tayyor",
   CONFIRMED: "Tasdiqlangan",
   RESCHEDULE_REQUESTED: "Boshqa vaqt so‘ralgan",
@@ -269,6 +275,12 @@ export async function loadRegistry(): Promise<RegistryResult> {
       appointmentAt: c.appointment_time ?? undefined,
       referralStatus: c.referral_status,
       referralApprovedAt: c.referral_approved_at,
+      urgentOutreachApprovedAt: c.urgent_outreach_approved_at,
+      previousZone: c.previous_risk_zone,
+      observationVersion: c.created_at,
+      previousVitals: c.previous_observation
+        ? observationVitals(c.previous_observation)
+        : undefined,
       time: displayDate(
         c.follow_up_completed_at ??
           c.follow_up_at ??
@@ -362,7 +374,10 @@ export function approveReferral(caseId: string, practitionerId: string) {
 }
 
 export type RiskExplanation = {
-  source: "rules" | "local-model";
+  source: "rules" | "openrouter";
+  analyzer_status?: "not_configured" | "unavailable";
+  review_focus?:
+    "VERIFY_CHANGE" | "MISSING_OBSERVATIONS" | "SCREENING_FINDINGS";
   zone: Patient["zone"];
   reasons: string[];
   model?: string;
@@ -373,5 +388,13 @@ export function explainRisk(caseId: string) {
     "POST",
     undefined,
     20_000,
+  );
+}
+
+export function approveUrgentOutreach(caseId: string, practitionerId: string) {
+  return request(
+    `/api/cases/${encodeURIComponent(caseId)}/approve-urgent-outreach`,
+    "POST",
+    { practitioner_id: practitionerId },
   );
 }

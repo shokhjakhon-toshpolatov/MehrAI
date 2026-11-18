@@ -3,7 +3,7 @@ export type Patient = {
   id: string; name: string; age: number; cohort: 'MATERNAL' | 'NEONATAL' | 'POSTPARTUM';
   stage: string; clinic: string; zone: Zone; reason: string; vitals: string[];
   doctor: string; status: string; time: string;
-  statusCode?: string; deadline?: string; updatedAt?: string; appointmentAt?: string; referralStatus?: string; referralApprovedAt?: string;
+  statusCode?: string; deadline?: string; updatedAt?: string; appointmentAt?: string; referralStatus?: string; referralApprovedAt?: string; urgentOutreachApprovedAt?: string; previousZone?: Zone; previousVitals?: string[]; observationVersion?: string;
   motherId?: string; followUpAt?: string; followUpCompletedAt?: string; assessedAt?: string; assessedBy?: string;
 };
 export type Doctor = { id: string; name: string; specialty: string; initials: string; role: string };

@@ -113,16 +113,81 @@ class BackendTests(unittest.TestCase):
         self.assertTrue(any(c.get('appointment_id') == result['id'] for c in state['calls']))
         self.assertEqual(self.client.post('/api/referrals/p3/response', json=visit).status_code, 409)
 
-    def test_local_model_can_only_select_existing_evidence(self):
+    def test_openrouter_can_only_reorder_existing_evidence(self):
         from unittest.mock import patch
         from backend.explanations import explain_case
-        case = {'cohort_type': 'MATERNAL', 'risk_zone': 'RED', 'risk_reasons': ['First', 'Second']}
-        with patch.dict('os.environ', {'MEHRAI_OLLAMA_MODEL':'qwen3:8b'}), patch('backend.explanations.httpx.Client') as client:
-            provider = client.return_value.__enter__.return_value.post.return_value
-            provider.json.return_value = {'message': {'content': '{"indices":[0,1]}'}}
-            self.assertEqual(explain_case(case)['source'], 'local-model')
-            provider.json.return_value = {'message': {'content': '{"indices":[1,9]}'}}
-            self.assertEqual(explain_case(case), {'source':'rules','zone':'RED','reasons':['First','Second']})
+        evidence = ['First', 'Second', 'Third', 'Fourth']
+        case = {'cohort_type': 'MATERNAL', 'risk_zone': 'YELLOW', 'risk_reasons': evidence}
+        with patch.dict('os.environ', {'OPENROUTER_API_KEY':'test-key', 'MEHRAI_OPENROUTER_MODEL':''}), patch('backend.explanations.httpx.Client') as client:
+            post = client.return_value.__enter__.return_value.post
+            provider = post.return_value
+            provider.json.return_value = {'choices': [{'finish_reason':'stop', 'message': {'content':'{"indices":[1,0],"review_focus":"SCREENING_FINDINGS"}'}}]}
+            result = explain_case({**case, 'name':'Private name', 'patient_id':'private-id'})
+            self.assertEqual(result['source'], 'openrouter')
+            self.assertEqual(result['reasons'], ['Second', 'First', 'Third', 'Fourth'])
+            args, kwargs = post.call_args
+            self.assertEqual(args, ('https://openrouter.ai/api/v1/chat/completions',))
+            self.assertEqual(kwargs['headers']['Authorization'], 'Bearer test-key')
+            self.assertEqual(kwargs['json']['model'], 'qwen/qwen3.6-27b')
+            self.assertEqual(kwargs['json']['provider'], {'data_collection':'deny','zdr':True,'require_parameters':True})
+            self.assertNotIn('Private name', str(kwargs['json']))
+            self.assertNotIn('private-id', str(kwargs['json']))
+            provider.json.return_value = {'choices': [{'finish_reason':'stop', 'message': {'content':'{"indices":[1,9],"review_focus":"SCREENING_FINDINGS"}'}}]}
+            self.assertEqual(explain_case(case), {'source':'rules','zone':'YELLOW','reasons':evidence,'analyzer_status':'unavailable'})
+            client.reset_mock()
+            self.assertEqual(explain_case({**case, 'risk_zone':'RED'}),
+                             {'source':'rules','zone':'RED','reasons':evidence})
+            client.assert_not_called()
+        with patch.dict('os.environ', {'OPENROUTER_API_KEY':''}), patch('backend.explanations.httpx.Client') as client:
+            self.assertEqual(explain_case(case)['analyzer_status'], 'not_configured')
+            client.assert_not_called()
+
+    def test_red_change_requires_review_then_runs_one_simulated_call(self):
+        from datetime import timedelta
+        from unittest.mock import patch
+        change = self.client.post('/api/simulate/neonatal-red').json()
+        self.assertEqual(change['previous_risk_zone'], 'YELLOW')
+        self.assertEqual(change['previous_observation']['bilirubin'], 238)
+        self.assertEqual(change['risk_zone'], 'RED')
+        path = '/api/cases/p4/approve-urgent-outreach'
+        clinician = {'practitioner_id':'d4'}
+        self.assertEqual(self.client.post(path, json=clinician).status_code, 409)
+        self.assertEqual(self.client.post('/api/cases/p4/call').status_code, 409)
+        self.assertEqual(self.client.post('/api/cases/p4/accept').status_code, 200)
+        self.assertEqual(self.client.post(path, json={'practitioner_id':'d1'}).status_code, 409)
+        self.assertEqual(self.client.post(path, json=clinician).status_code, 200)
+        self.assertEqual(self.client.post(path, json=clinician).status_code, 200)
+        initial = main.now()
+        with main.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            tasks = [c for c in main.all_of(db, 'Call') if c['case_id'] == 'p4']
+            self.assertEqual(len(tasks), 1)
+            call_id = tasks[0]['id']
+            self.assertEqual(tasks[0]['target_role'], 'MOTHER_OF_NEWBORN')
+            with patch('backend.main.now', return_value=initial+timedelta(seconds=2)):
+                main.process_due(db)
+                self.assertEqual(main.get(db, 'Call', call_id)[0]['status'], 'DEMO_CALL_RUNNING')
+            with patch('backend.main.now', return_value=initial+timedelta(seconds=7)):
+                main.process_due(db)
+                self.assertEqual(main.get(db, 'Call', call_id)[0]['status'], 'DEMO_CALL_COMPLETE')
+        self.assertFalse(self.client.get('/api/registry').json()['appointments'])
+
+    def test_agent_reviews_measured_change_without_reclassifying_red(self):
+        import json
+        from unittest.mock import patch
+        from backend.explanations import explain_case
+        case = self.client.post('/api/simulate/neonatal-red').json()
+        with patch.dict('os.environ', {'OPENROUTER_API_KEY':'test-key'}), patch('backend.explanations.httpx.Client') as client:
+            post = client.return_value.__enter__.return_value.post
+            post.return_value.json.return_value = {'choices': [{
+                'finish_reason':'stop', 'message': {'content':'{"indices":[1],"review_focus":"VERIFY_CHANGE"}'},
+            }]}
+            result = explain_case(case)
+            self.assertEqual(result['zone'], 'RED')
+            self.assertEqual(result['reasons'], case['risk_reasons'])
+            self.assertEqual(result['review_focus'], 'VERIFY_CHANGE')
+            messages = post.call_args.kwargs['json']['messages']
+            self.assertEqual(json.loads(messages[1]['content'])['changes']['bilirubin'], {'before':238,'after':295})
 
     def test_seed_and_routing(self):
         data=self.client.get('/api/registry').json()

@@ -20,13 +20,14 @@ See [backend/README.md](backend/README.md) for the local API contract and limits
 
 In the local sample workspace, open a yellow case from the bell or **Yo‘llanmalar**, switch to the assigned doctor's view, and approve the referral. Record the facility's response before creating a sample appointment or opening planned outreach. **Qabullar** filters by the clinician seeing the patient. The doctor selector is a demo view switch, not a login.
 
-## Optional local AI evidence summary
+## OpenRouter AI analyzer
 
-Install and start [Ollama](https://ollama.com/), then pull the open-weight [Qwen3 8B model](https://ollama.com/library/qwen3:8b) and restart MehrAI with:
+Set `OPENROUTER_API_KEY` in the backend environment, then restart Uvicorn. The default model is [Qwen3.6 27B](https://openrouter.ai/qwen/qwen3.6-27b). Optionally set `MEHRAI_OPENROUTER_MODEL` to another supported OpenRouter model. The key stays on the server. Keep it out of source control and frontend environment variables.
 
-```sh
-ollama pull qwen3:8b
-MEHRAI_OLLAMA_MODEL=qwen3:8b backend/.venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000
-```
+In a patient drawer, **AI tahlilini olish** asks the model to review existing sample rule findings and measured changes. A newly red case requests this review in the background when its card opens. MehrAI accepts only valid references and keeps every finding visible. Only the sample cohort, risk band, rule findings, and allowlisted numerical changes are sent. The backend requires providers that support the requested parameters and have zero data retention and no data collection. Red findings appear immediately in their original order, independently of the optional agent review. A missing key, incompatible model, or provider failure falls back to the rules.
 
-In a patient drawer, **AI yordamida dalillarni tartiblash** asks the local model to prioritize existing rule findings. The backend accepts only valid references to those findings. It keeps the original risk flag and falls back to the rule evidence if the model is unavailable. Use synthetic cases only. The model is an optional presentation aid and has not been clinically validated.
+This analyzer is for synthetic hackathon cases. The screening rules and workflow require clinical validation before any real-world use.
+
+## Red-case hackathon demo
+
+Run the local backend, open **Demo simulyator**, and choose the newborn or maternal observation. Open that patient from the urgent queue or bell. Record the review, switch to the assigned doctor's sample view if prompted, and choose **Aloqani tasdiqlash**. The server automatically moves the simulated call from queued to running to complete. It does not dial a phone. The intended live source is the clinic-recorded contact in DMED, subject to authorized access and endpoint verification.

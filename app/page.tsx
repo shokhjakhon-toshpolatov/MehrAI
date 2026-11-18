@@ -26,12 +26,13 @@ import {
   Zap,
 } from "lucide-react";
 import Registry from "@/components/Registry";
-import { Patient, seedPatients } from "@/lib/demo";
+import { Patient, seedPatients, zoneLabels } from "@/lib/demo";
 import {
   loadRegistry,
   performCaseAction,
   recordOutcome,
   approveReferral,
+  approveUrgentOutreach,
   explainRisk,
   type RiskExplanation,
   recordFacilityResponse,
@@ -95,16 +96,21 @@ export default function Dashboard() {
       if (version === requestVersion.current) setOffline(true);
     }
   }, []);
+  const demoCallActive =
+    data?.calls.some(
+      (c) =>
+        c.status === "DEMO_CALL_QUEUED" || c.status === "DEMO_CALL_RUNNING",
+    ) ?? false;
   useEffect(() => {
     void refresh();
-    const sync = setInterval(refresh, 15000);
+    const sync = setInterval(refresh, demoCallActive ? 1500 : 15000);
     const tick = setInterval(() => setClock(Date.now()), 1000);
     return () => {
       ++requestVersion.current;
       clearInterval(sync);
       clearInterval(tick);
     };
-  }, [refresh]);
+  }, [refresh, demoCallActive]);
   useEffect(() => {
     const close = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -133,6 +139,13 @@ export default function Dashboard() {
       setWorking(false);
     }
   };
+  const runObservationDemo = (scenario: "maternal-red" | "neonatal-red") =>
+    save(async () => {
+      await runScenario(scenario);
+      setSim(false);
+      setPersona("district");
+      setTab("overview");
+    });
   const isPending = (p: Patient) => p.statusCode === "PENDING_DOCTOR_ACK";
   const scoped = patients.filter(
     (p) => persona === "district" || p.doctor === persona,
@@ -144,7 +157,7 @@ export default function Dashboard() {
     ["READY", "QUEUED", "NO_ANSWER"].includes(c.status),
   );
   const emergency = scoped.filter(
-    (p) => p.zone === "RED" && p.statusCode !== "DOCTOR_ACCEPTED",
+    (p) => p.zone === "RED" && !p.urgentOutreachApprovedAt,
   );
   const reviewQueue = scoped.filter(
     (p) => p.referralStatus === "AWAITING_CLINICIAN",
@@ -203,6 +216,9 @@ export default function Dashboard() {
           referral_approved: "Yo‘llanma tasdiqlandi",
           busy: "Holat o‘tkazildi",
           outreach: "Aloqa natijasi qayd etildi",
+          urgent_outreach_approved: "Shoshilinch aloqa tasdiqlandi",
+          demo_call_started: "Sinov qo‘ng‘irog‘i boshlandi",
+          demo_call_completed: "Sinov qo‘ng‘irog‘i yakunlandi",
           call: "Aloqa vazifasi yaratildi",
           facility_response: "Muassasa javobi qayd etildi",
           postpartum_follow_up: "Tug‘ruqdan keyingi kuzatuv qayd etildi",
@@ -855,7 +871,7 @@ export default function Dashboard() {
                       </p>
                     </div>
                     <strong>{c.statusLabel}</strong>
-                    {isOpenContact(c) && (
+                    {patient?.zone !== "RED" && isOpenContact(c) && (
                       <ContactOutcomeForm
                         key={c.id}
                         task={c}
@@ -1009,14 +1025,14 @@ export default function Dashboard() {
                     title: "Onada yuqori xavf",
                     text: "AQB 165/110 · Proteinuriya ++",
                     icon: HeartPulse,
-                    action: () => save(() => runScenario("maternal-red")),
+                    action: () => runObservationDemo("maternal-red"),
                     tone: "red",
                   },
                   {
                     title: "Chaqaloqda yuqori xavf",
                     text: "Bilirubin 295 µmol/L · Harorat 38.4 °C",
                     icon: Baby,
-                    action: () => save(() => runScenario("neonatal-red")),
+                    action: () => runObservationDemo("neonatal-red"),
                     tone: "amber",
                   },
                   {
@@ -1071,6 +1087,19 @@ export default function Dashboard() {
                           ? "Baholash kutilmoqda"
                           : "Yashil zona"}
                   </span>
+                  {selected.previousZone &&
+                    selected.previousZone !== selected.zone && (
+                      <div className="detail-block">
+                        <h3>Yangi kuzatuvda o‘zgarish aniqlandi</h3>
+                        <p>
+                          {zoneLabels[selected.previousZone]} →{" "}
+                          {zoneLabels[selected.zone]}
+                        </p>
+                        {!!selected.previousVitals?.length && (
+                          <p>Avval: {selected.previousVitals.join(" · ")}</p>
+                        )}
+                      </div>
+                    )}
                   <div className="detail-block">
                     <h3>Klinik ko‘rsatkichlar</h3>
                     <strong>{selected.reason}</strong>
@@ -1238,17 +1267,50 @@ export default function Dashboard() {
                     </h3>
                     <p>
                       Aloqa oluvchi:{" "}
-                      {selected.zone === "RED"
-                        ? "Oila a’zosi"
-                        : selected.cohort === "NEONATAL"
-                          ? "Chaqaloqning onasi"
+                      {selected.cohort === "NEONATAL"
+                        ? "Chaqaloqning onasi"
+                        : selected.zone === "RED"
+                          ? "Oila a’zosi"
                           : "Bemor"}
                     </p>
-                    <p>Namuna yozuvi · telefon raqami mavjud emas</p>
+                    <p>Manba: bemor kartasidagi namuna aloqa yozuvi</p>
                     {selectedTasks.length > 0 && (
                       <p>So‘nggi natija: {selectedTasks.at(-1)?.statusLabel}</p>
                     )}
-                    {!canContact ? (
+                    {selected.zone === "RED" ? (
+                      selected.urgentOutreachApprovedAt ? (
+                        <p role="status">
+                          Shifokor tasdiqladi. Sinov qo‘ng‘irog‘i avtomatik
+                          ishga tushgan.
+                        </p>
+                      ) : selected.statusCode !== "DOCTOR_ACCEPTED" ? (
+                        <p>Avval shoshilinch holatni ko‘rib chiqing.</p>
+                      ) : persona !== selected.doctor ? (
+                        <button
+                          className="button"
+                          disabled={!selected.doctor}
+                          onClick={() => setPersona(selected.doctor)}
+                        >
+                          Mas’ul shifokor ko‘rinishiga o‘tish
+                        </button>
+                      ) : (
+                        <button
+                          className="button primary"
+                          disabled={offline || working}
+                          onClick={() =>
+                            save(() =>
+                              approveUrgentOutreach(
+                                selected.id,
+                                practitionerIds[selected.doctor],
+                              ),
+                            )
+                          }
+                        >
+                          <Phone size={15} /> Aloqani tasdiqlash · avtomatik
+                          sinov qo‘ng‘irog‘i
+                        </button>
+                      )
+                    ) : !canContact ? (
                       <p>
                         Mas’ul shifokor tasdig‘i va muassasa belgilagan tashrif
                         kutilmoqda.
@@ -1366,31 +1428,52 @@ function CaseRationale({
   offline: boolean;
 }) {
   const [result, setResult] = useState<
-    (RiskExplanation & { updatedAt?: string }) | null
+    (RiskExplanation & { observationVersion?: string }) | null
   >(null);
   const [loading, setLoading] = useState(false);
   const current =
-    result?.zone === patient.zone && result.updatedAt === patient.updatedAt
+    result?.zone === patient.zone &&
+    result.observationVersion === patient.observationVersion
       ? result
       : null;
-  async function load() {
+  const autoRequested = useRef<string | undefined>(undefined);
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       setResult({
         ...(await explainRisk(patient.id)),
-        updatedAt: patient.updatedAt,
+        observationVersion: patient.observationVersion,
       });
     } catch {
       setResult({
         source: "rules",
         zone: patient.zone,
         reasons: [patient.reason],
-        updatedAt: patient.updatedAt,
+        observationVersion: patient.observationVersion,
       });
     } finally {
       setLoading(false);
     }
-  }
+  }, [patient.id, patient.observationVersion, patient.zone, patient.reason]);
+  useEffect(() => {
+    if (
+      offline ||
+      patient.zone !== "RED" ||
+      !patient.previousZone ||
+      patient.previousZone === "RED" ||
+      !patient.observationVersion ||
+      autoRequested.current === patient.observationVersion
+    )
+      return;
+    autoRequested.current = patient.observationVersion;
+    void load();
+  }, [
+    offline,
+    patient.zone,
+    patient.previousZone,
+    patient.observationVersion,
+    load,
+  ]);
   return (
     <div className="detail-block case-rationale">
       <h3>Xavf belgisi sababi</h3>
@@ -1402,17 +1485,40 @@ function CaseRationale({
       <small>
         {patient.assessedAt
           ? "Namuna mutaxassis bahosi"
-          : current?.source === "local-model"
-            ? `Dalillarni mahalliy AI tartibladi · ${current.model}`
+          : current?.source === "openrouter"
+            ? `AI tahlilchi · ${current.model}`
             : "Namuna qoidalari asosida"}
       </small>
-      {!offline && !patient.assessedAt && (
-        <button className="button" disabled={loading} onClick={load}>
-          {loading
-            ? "Dalillar ko‘rib chiqilmoqda…"
-            : "AI yordamida dalillarni tartiblash"}
-        </button>
+      {current?.source === "openrouter" && current.review_focus && (
+        <p className="sample-assessment">
+          Shifokor uchun:{" "}
+          {
+            {
+              VERIFY_CHANGE:
+                "Avvalgi va yangi ko‘rsatkichlar o‘rtasidagi o‘zgarishni tekshiring.",
+              MISSING_OBSERVATIONS:
+                "Yetishmayotgan kuzatuv ma’lumotlarini tekshiring.",
+              SCREENING_FINDINGS:
+                "Qoidalar belgilagan dalillarni ko‘rib chiqing.",
+            }[current.review_focus]
+          }
+        </p>
       )}
+      {current?.analyzer_status && (
+        <p className="sample-assessment" role="status">
+          {current.analyzer_status === "not_configured"
+            ? "OpenRouter sozlanmagan. Qoida dalillari ko‘rsatilmoqda."
+            : "AI tahlili vaqtincha mavjud emas. Qoida dalillari ko‘rsatilmoqda."}
+        </p>
+      )}
+      {!offline &&
+        !patient.assessedAt &&
+        (patient.zone !== "RED" ||
+          (patient.previousZone && patient.previousZone !== "RED")) && (
+          <button className="button" disabled={loading} onClick={load}>
+            {loading ? "Dalillar ko‘rib chiqilmoqda…" : "AI tahlilini olish"}
+          </button>
+        )}
     </div>
   );
 }
