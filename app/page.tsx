@@ -34,6 +34,9 @@ import {
   approveReferral,
   approveUrgentOutreach,
   explainRisk,
+  startDemoStream,
+  type DemoAnalysis,
+  type DemoStream,
   type RiskExplanation,
   recordFacilityResponse,
   recordAttendance,
@@ -101,16 +104,23 @@ export default function Dashboard() {
       (c) =>
         c.status === "DEMO_CALL_QUEUED" || c.status === "DEMO_CALL_RUNNING",
     ) ?? false;
+  const streamActive =
+    data?.demoStream?.status === "STREAMING" ||
+    data?.demoStream?.events.some(
+      (event) => event.analysis_status === "PENDING",
+    ) ||
+    false;
+  const fastRefresh = demoCallActive || streamActive;
   useEffect(() => {
     void refresh();
-    const sync = setInterval(refresh, demoCallActive ? 1500 : 15000);
+    const sync = setInterval(refresh, fastRefresh ? 1000 : 15000);
     const tick = setInterval(() => setClock(Date.now()), 1000);
     return () => {
       ++requestVersion.current;
       clearInterval(sync);
       clearInterval(tick);
     };
-  }, [refresh, demoCallActive]);
+  }, [refresh, fastRefresh]);
   useEffect(() => {
     const close = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -139,6 +149,14 @@ export default function Dashboard() {
       setWorking(false);
     }
   };
+  const runStreamDemo = () =>
+    save(async () => {
+      await startDemoStream();
+      setSim(false);
+      setSelected(null);
+      setPersona("district");
+      setTab("overview");
+    });
   const runObservationDemo = (scenario: "maternal-red" | "neonatal-red") =>
     save(async () => {
       await runScenario(scenario);
@@ -508,6 +526,15 @@ export default function Dashboard() {
               ))}
             </section>
           )}
+          {tab === "overview" && data?.demoStream && (
+            <ObservationFeed
+              stream={data.demoStream}
+              onOpen={(id) => {
+                const patient = patients.find((p) => p.id === id);
+                if (patient) setSelected(patient);
+              }}
+            />
+          )}
           {tab === "overview" && (
             <>
               <div className="alert-strip">
@@ -866,8 +893,11 @@ export default function Dashboard() {
                         {c.patientName}
                       </button>
                       <p>
-                        {c.target} · {c.attempts} urinish ·{" "}
-                        {formatDate(c.scheduledAt)}
+                        {c.target}
+                        {patient?.cohort === "NEONATAL" && patient.motherName
+                          ? ` · ${patient.motherName}`
+                          : ""}{" "}
+                        · {c.attempts} urinish · {formatDate(c.scheduledAt)}
                       </p>
                     </div>
                     <strong>{c.statusLabel}</strong>
@@ -1020,6 +1050,20 @@ export default function Dashboard() {
                   <ShieldCheck size={18} />
                   Sun’iy bemorlar. Haqiqiy tibbiy harakatlar bajarilmaydi.
                 </div>
+                <button
+                  className="button primary demo-stream-start"
+                  disabled={
+                    offline ||
+                    working ||
+                    data?.demoStream?.status === "STREAMING"
+                  }
+                  onClick={runStreamDemo}
+                >
+                  <Activity size={17} /> Ma’lumotlar oqimini boshlash
+                </button>
+                <p className="drawer-intro">
+                  Sinov IT-MED API · 4 ta namunaviy kuzatuv ketma-ket keladi.
+                </p>
                 {[
                   {
                     title: "Onada yuqori xavf",
@@ -1175,6 +1219,7 @@ export default function Dashboard() {
                     key={selected.id}
                     patient={selected}
                     offline={offline}
+                    analysis={data?.demoAnalyses[selected.id]}
                   />
                   {relatedPatients.length > 0 && (
                     <div className="detail-block">
@@ -1273,7 +1318,23 @@ export default function Dashboard() {
                           ? "Oila a’zosi"
                           : "Bemor"}
                     </p>
-                    <p>Manba: bemor kartasidagi namuna aloqa yozuvi</p>
+                    {selected.cohort === "NEONATAL" && (
+                      <p>
+                        Onasi:{" "}
+                        <strong>
+                          {selected.motherName ??
+                            relatedPatients[0]?.name ??
+                            "Namuna vasiy"}
+                        </strong>
+                      </p>
+                    )}
+                    <p>
+                      Namuna telefon:{" "}
+                      <strong>
+                        {selected.phoneDisplay ?? "+998 •• ••• •• ••"}
+                      </strong>
+                    </p>
+                    <p>Manba: sinov IT-MED aloqa yozuvi</p>
                     {selectedTasks.length > 0 && (
                       <p>So‘nggi natija: {selectedTasks.at(-1)?.statusLabel}</p>
                     )}
@@ -1420,22 +1481,83 @@ export default function Dashboard() {
     </div>
   );
 }
+function ObservationFeed({
+  stream,
+  onOpen,
+}: {
+  stream: DemoStream;
+  onOpen: (id: string) => void;
+}) {
+  return (
+    <section className="panel demo-feed" aria-labelledby="demo-feed-title">
+      <div className="panel-heading">
+        <div>
+          <h2 id="demo-feed-title">Sinov IT-MED ma’lumotlar oqimi</h2>
+          <p>Namuna kuzatuvlari · /dmed/v2/Observation</p>
+        </div>
+        <span className="badge blue" role="status">
+          {stream.events.length}/{stream.total} ·{" "}
+          {stream.status === "STREAMING" ? "Qabul qilinmoqda" : "Yakunlandi"}
+        </span>
+      </div>
+      {stream.events.length === 0 && (
+        <p className="workflow-empty">Birinchi namuna kuzatuvi kutilmoqda.</p>
+      )}
+      {stream.events
+        .slice()
+        .reverse()
+        .map((event) => (
+          <button
+            key={event.id}
+            className="appointment-row demo-feed-row"
+            onClick={() => onOpen(event.patient_id)}
+          >
+            <span className={`zone-badge zone-${event.zone.toLowerCase()}`}>
+              {zoneLabels[event.zone]}
+            </span>
+            <div>
+              <strong>{event.patient_name}</strong>
+              <p>
+                {event.previous_zone && event.previous_zone !== event.zone
+                  ? `${zoneLabels[event.previous_zone]} → ${zoneLabels[event.zone]}`
+                  : "Yangi kuzatuv qabul qilindi"}
+              </p>
+            </div>
+            <span>
+              {event.analysis_status === "PENDING"
+                ? "Tahlil kutilmoqda"
+                : event.analysis_source === "openrouter"
+                  ? "AI tekshirdi"
+                  : event.analysis_status === "SUPERSEDED"
+                    ? "Yangi kuzatuv bor"
+                    : "Qoida bo‘yicha baholandi"}
+            </span>
+            <ChevronRight size={16} />
+          </button>
+        ))}
+    </section>
+  );
+}
+
 function CaseRationale({
   patient,
   offline,
+  analysis,
 }: {
   patient: Patient;
   offline: boolean;
+  analysis?: DemoAnalysis;
 }) {
   const [result, setResult] = useState<
     (RiskExplanation & { observationVersion?: string }) | null
   >(null);
   const [loading, setLoading] = useState(false);
   const current =
-    result?.zone === patient.zone &&
+    analysis?.result ??
+    (result?.zone === patient.zone &&
     result.observationVersion === patient.observationVersion
       ? result
-      : null;
+      : null);
   const autoRequested = useRef<string | undefined>(undefined);
   const load = useCallback(async () => {
     setLoading(true);
@@ -1458,6 +1580,7 @@ function CaseRationale({
   useEffect(() => {
     if (
       offline ||
+      analysis ||
       patient.zone !== "RED" ||
       !patient.previousZone ||
       patient.previousZone === "RED" ||
@@ -1469,6 +1592,7 @@ function CaseRationale({
     void load();
   }, [
     offline,
+    analysis,
     patient.zone,
     patient.previousZone,
     patient.observationVersion,
@@ -1504,6 +1628,11 @@ function CaseRationale({
           }
         </p>
       )}
+      {analysis?.status === "PENDING" && (
+        <p className="sample-assessment" role="status">
+          AI tahlilchi yangi kuzatuvni tekshirmoqda.
+        </p>
+      )}
       {current?.analyzer_status && (
         <p className="sample-assessment" role="status">
           {current.analyzer_status === "not_configured"
@@ -1512,6 +1641,7 @@ function CaseRationale({
         </p>
       )}
       {!offline &&
+        !analysis &&
         !patient.assessedAt &&
         (patient.zone !== "RED" ||
           (patient.previousZone && patient.previousZone !== "RED")) && (

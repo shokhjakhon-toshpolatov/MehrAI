@@ -31,3 +31,11 @@ This analyzer is for synthetic hackathon cases. The screening rules and workflow
 ## Red-case hackathon demo
 
 Run the local backend, open **Demo simulyator**, and choose the newborn or maternal observation. Open that patient from the urgent queue or bell. Record the review, switch to the assigned doctor's sample view if prompted, and choose **Aloqani tasdiqlash**. The server automatically moves the simulated call from queued to running to complete. It does not dial a phone. The intended live source is the clinic-recorded contact in DMED, subject to authorized access and endpoint verification.
+
+## Live sample data replay
+
+Open **Demo simulyator → Ma’lumotlar oqimini boshlash** in the local app. The replay feeds four sample observations through the same ingestion function as `POST /dmed/v2/Observation`. The overview shows arrivals, zone changes, and the analysis status. A backend worker runs the optional OpenRouter review without holding up the feed or the red alert. Open the newborn record to see the mother’s name and a masked sample phone number.
+
+MehrAI is designed for future integration with DMED, subject to authorized access and verified endpoints for the facility. The mock feed imitates IT-MED's published integration API. Neither DMED nor the Ministry of Health's live API is connected.
+
+For a newer open-weight candidate on OpenRouter, set `MEHRAI_OPENROUTER_MODEL=qwen/qwen3.8-2.4t-a95b` and restart the backend. The model is configurable so the same sample feed can be used to compare models.

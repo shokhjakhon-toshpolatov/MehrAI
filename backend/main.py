@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from .risk import evaluate
 from .explanations import explain_case
+from .demo_stream import OBSERVATION_FEED, EVENT_INTERVAL_SECONDS, sample_contact
 from .seed import PATIENTS, DOCTORS, POSTPARTUM_SAMPLE_ASSESSMENTS
 
 DB = os.getenv('DMED_DB', str(Path(__file__).with_name('demo.sqlite3')))
@@ -146,7 +147,7 @@ def ingest(db, patient_id, observation):
                 _, version = get(db, 'Appointment', appointment['id'])
                 appointment['status'] = 'cancelled'
                 put(db, 'Appointment', appointment['id'], appointment, version + 1)
-    put(db,'Observation',oid,{'id':oid,'patient':patient_id,**observation})
+    put(db, 'Observation', oid, {**observation, 'id': oid, 'patient': patient_id})
     case = {'id':patient_id,'patient_id':patient_id,'cohort_type':patient['cohort_type'],**risk,
             'observation':observation,'created_at':stamp(),'status':'ROUTINE','assigned_practitioner_id':None}
     if prior:
@@ -216,6 +217,68 @@ def escalate(db,case):
     put(db,'Case',case['id'],case)
     return case
 
+def receive_mock_observation(db, payload):
+    patient = payload.get('patient')
+    if not isinstance(patient, str) or not patient.strip():
+        raise HTTPException(422, 'Bemor identifikatori kerak')
+    try:
+        return ingest(db, patient.split('/')[-1], payload)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+def advance_demo_feed(db):
+    runs = all_of(db, 'DemoRun')
+    if not runs:
+        return
+    run = runs[-1]
+    if run['status'] != 'STREAMING' or datetime.fromisoformat(run['next_at']) > now():
+        return
+    index = len(run['events'])
+    patient_id, changes = OBSERVATION_FEED[index]
+    patient, _ = get(db, 'Patient', patient_id)
+    event_id = f"{run['id']}-{index+1}"
+    case = receive_mock_observation(db, {
+        **patient['observation'], **changes,
+        'resourceType': 'Observation', 'id': event_id, 'patient': f'Patient/{patient_id}',
+    })
+    case['demo_analysis_id'] = event_id
+    put(db, 'Case', case['id'], case)
+    put(db, 'DemoAnalysis', event_id, {
+        'id': event_id, 'case_id': case['id'], 'case_version': case['created_at'], 'status': 'PENDING',
+    })
+    run['events'].append({
+        'id': event_id, 'patient_id': patient_id, 'patient_name': patient['name'],
+        'previous_zone': case.get('previous_risk_zone'), 'zone': case['risk_zone'],
+        'received_at': stamp(),
+    })
+    if len(run['events']) == len(OBSERVATION_FEED):
+        run['status'] = 'COMPLETE'
+    else:
+        run['next_at'] = stamp(now() + timedelta(seconds=EVENT_INTERVAL_SECONDS))
+    put(db, 'DemoRun', run['id'], run)
+
+
+async def demo_analysis_worker():
+    while True:
+        with connect() as db:
+            pending = next((job for job in all_of(db, 'DemoAnalysis') if job['status'] == 'PENDING'), None)
+            case = get(db, 'Case', pending['case_id'])[0] if pending else None
+        if not pending:
+            await asyncio.sleep(0.5)
+            continue
+        is_current = case.get('demo_analysis_id') == pending['id']
+        result = await asyncio.to_thread(explain_case, case) if is_current else None
+        with connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            current, _ = get(db, 'Case', pending['case_id'])
+            if current.get('demo_analysis_id') == pending['id'] and result:
+                pending.update(status='COMPLETE', result=result)
+            else:
+                pending['status'] = 'SUPERSEDED'
+            put(db, 'DemoAnalysis', pending['id'], pending)
+
+
 def process_due(db):
     for case in all_of(db,'Case'):
         if case['status']=='PENDING_DOCTOR_ACK' and datetime.fromisoformat(case['escalation_deadline'])<=now(): escalate(db,case)
@@ -263,17 +326,20 @@ async def worker():
         with connect() as db:
             db.execute('BEGIN IMMEDIATE')
             process_due(db)
+            advance_demo_feed(db)
         await asyncio.sleep(1)
 
 @asynccontextmanager
 async def lifespan(app):
     if os.getenv('DMED_MODE','mock')!='mock': raise RuntimeError('Only mock mode implemented; sandbox requires verified API contract and credentials')
     init()
-    task=asyncio.create_task(worker())
-    yield
-    task.cancel()
-    try: await task
-    except asyncio.CancelledError: pass
+    tasks = [asyncio.create_task(worker()), asyncio.create_task(demo_analysis_worker())]
+    try:
+        yield
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 app=FastAPI(title='MehrAI — sample perinatal workspace',lifespan=lifespan)
 CORS_ORIGINS = [origin.strip() for origin in os.getenv('CORS_ORIGINS','http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://localhost:8000,http://127.0.0.1:8000').split(',') if origin.strip()]
@@ -281,7 +347,45 @@ app.add_middleware(CORSMiddleware,allow_origins=CORS_ORIGINS,allow_methods=['*']
 
 @app.get('/api/registry')
 def registry():
-    with connect() as db: return {'mode':'mock','patients':[{k: v for k, v in p.items() if k != 'telecom'} for p in all_of(db,'Patient')],'cases':all_of(db,'Case'),'doctors':all_of(db,'PractitionerRole'),'calls':all_of(db,'Call'),'appointments':all_of(db,'Appointment'),'audit':all_of(db,'AuditEvent')}
+    with connect() as db:
+        patients = [
+            {**{key: value for key, value in patient.items() if key != 'telecom'}, 'contact': sample_contact(patient)}
+            for patient in all_of(db, 'Patient')
+        ]
+        jobs = {job['id']: job for job in all_of(db, 'DemoAnalysis')}
+        cases = all_of(db, 'Case')
+        for case in cases:
+            job = jobs.get(case.get('demo_analysis_id'))
+            if job:
+                case['demo_analysis'] = {'status': job['status'], 'result': job.get('result')}
+        runs = all_of(db, 'DemoRun')
+        stream = runs[-1] if runs else None
+        if stream:
+            for event in stream['events']:
+                job = jobs[event['id']]
+                event['analysis_status'] = job['status']
+                event['analysis_source'] = (job.get('result') or {}).get('source')
+        return {
+            'mode': 'mock', 'patients': patients, 'cases': cases, 'doctors': all_of(db, 'PractitionerRole'),
+            'calls': all_of(db, 'Call'), 'appointments': all_of(db, 'Appointment'), 'audit': all_of(db, 'AuditEvent'),
+            'demo_stream': stream,
+        }
+
+
+@app.post('/api/simulation/start')
+def start_demo_stream():
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        runs = all_of(db, 'DemoRun')
+        if runs and runs[-1]['status'] == 'STREAMING':
+            return runs[-1]
+        run = {
+            'id': str(uuid4()), 'status': 'STREAMING', 'total': len(OBSERVATION_FEED),
+            'next_at': stamp(now() + timedelta(seconds=1)), 'events': [],
+        }
+        put(db, 'DemoRun', run['id'], run)
+        return run
+
 
 @app.post('/api/simulate/{scenario}')
 def simulate(scenario:str):
@@ -299,6 +403,10 @@ def simulate(scenario:str):
 def case_explanation(case_id: str):
     with connect() as db:
         case, _ = get(db, 'Case', case_id)
+        if case.get('demo_analysis_id'):
+            job, _ = get(db, 'DemoAnalysis', case['demo_analysis_id'])
+            if job.get('result'):
+                return job['result']
     return explain_case(case)
 
 class ReferralApproval(BaseModel):
@@ -572,9 +680,8 @@ def create_resource(kind:str,payload:dict,response:Response):
     if kind not in {'Observation','ServiceRequest','Appointment','Encounter'}: raise HTTPException(405,'Unsupported create')
     with connect() as db:
         db.execute('BEGIN IMMEDIATE')
-        if kind=='Observation':
-            try: return ingest(db,payload['patient'].split('/')[-1],payload)
-            except (KeyError,ValueError) as exc: raise HTTPException(422,str(exc))
+        if kind == 'Observation':
+            return receive_mock_observation(db, payload)
         if kind == 'Appointment':
             patient_id = payload.get('patient', '')
             if not isinstance(patient_id, str) or not patient_id:

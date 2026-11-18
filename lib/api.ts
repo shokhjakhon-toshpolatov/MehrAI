@@ -31,7 +31,29 @@ export type Appointment = {
 };
 export type OutreachOutcome =
   "REACHED" | "CONFIRMED" | "RESCHEDULE_REQUESTED" | "NO_ANSWER";
+export type DemoAnalysis = {
+  status: "PENDING" | "COMPLETE" | "SUPERSEDED";
+  result?: RiskExplanation | null;
+};
+export type DemoEvent = {
+  id: string;
+  patient_id: string;
+  patient_name: string;
+  received_at: string;
+  previous_zone?: Patient["zone"];
+  zone: Patient["zone"];
+  analysis_status?: DemoAnalysis["status"];
+  analysis_source?: RiskExplanation["source"];
+};
+export type DemoStream = {
+  id: string;
+  status: "STREAMING" | "COMPLETE";
+  total: number;
+  events: DemoEvent[];
+};
 export type RegistryResult = {
+  demoStream: DemoStream | null;
+  demoAnalyses: Record<string, DemoAnalysis>;
   appointments: Appointment[];
   patients: Patient[];
   calls: Outreach[];
@@ -45,6 +67,7 @@ type ApiPatient = {
   name: string;
   cohort_type: Patient["cohort"];
   mother_id?: string;
+  contact?: { mother_name?: string; phone_display?: string };
   postpartum_days?: number;
   age?: number;
   age_days?: number;
@@ -52,6 +75,7 @@ type ApiPatient = {
   clinic: string;
 };
 type ApiCase = {
+  demo_analysis?: DemoAnalysis;
   id: string;
   patient_id: string;
   risk_zone: string;
@@ -84,6 +108,7 @@ type ApiCall = {
   attempts: number;
 };
 type ApiRegistry = {
+  demo_stream?: DemoStream | null;
   appointments?: Appointment[];
   mode: "mock" | "live";
   patients: ApiPatient[];
@@ -253,6 +278,8 @@ export async function loadRegistry(): Promise<RegistryResult> {
             ? `Tug‘ruqdan keyin ${p.postpartum_days ?? "—"} kun`
             : `${p.gestational_weeks ?? "—"}-hafta`,
       motherId: p.mother_id,
+      motherName: p.contact?.mother_name,
+      phoneDisplay: p.contact?.phone_display,
       assessedAt: c.assessment_at,
       assessedBy: c.assessed_by
         ? (doctorIds[c.assessed_by] ?? c.assessed_by)
@@ -310,6 +337,12 @@ export async function loadRegistry(): Promise<RegistryResult> {
   return {
     patients,
     calls,
+    demoStream: data.demo_stream ?? null,
+    demoAnalyses: Object.fromEntries(
+      data.cases.flatMap((c) =>
+        c.demo_analysis ? [[c.id, c.demo_analysis]] : [],
+      ),
+    ),
     appointments: (data.appointments ?? []).map((visit) => ({
       ...visit,
       practitioner: visit.practitioner
@@ -397,4 +430,8 @@ export function approveUrgentOutreach(caseId: string, practitionerId: string) {
     "POST",
     { practitioner_id: practitionerId },
   );
+}
+
+export function startDemoStream() {
+  return request<DemoStream>("/api/simulation/start", "POST");
 }

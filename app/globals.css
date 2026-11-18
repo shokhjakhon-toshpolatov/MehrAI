@@ -59,3 +59,6 @@
 .appointments-table + .workflow-empty{margin-top:16px}
 .case-rationale ul{padding-left:18px;line-height:1.6;margin:0 0 8px}
 .case-rationale button{display:flex;margin-top:9px}
+.demo-feed{margin-bottom:18px}
+.demo-feed-row{border-top:1px solid var(--line)}
+.demo-stream-start{width:100%;margin-bottom:4px}

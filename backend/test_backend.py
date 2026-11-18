@@ -189,6 +189,35 @@ class BackendTests(unittest.TestCase):
             messages = post.call_args.kwargs['json']['messages']
             self.assertEqual(json.loads(messages[1]['content'])['changes']['bilirubin'], {'before':238,'after':295})
 
+    def test_stream_delivers_mock_observations_and_queues_analysis(self):
+        from datetime import timedelta
+        from unittest.mock import patch
+        start = self.client.post('/api/simulation/start').json()
+        self.assertEqual(start['events'], [])
+        self.assertEqual(self.client.post('/api/simulation/start').json()['id'], start['id'])
+        tick = main.now() + timedelta(seconds=2)
+        with main.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            for index in range(start['total']):
+                with patch('backend.main.now', return_value=tick):
+                    main.advance_demo_feed(db)
+                    main.advance_demo_feed(db)
+                run, _ = main.get(db, 'DemoRun', start['id'])
+                self.assertEqual(len(run['events']), index + 1)
+                event = run['events'][-1]
+                observation, _ = main.get(db, 'Observation', event['id'])
+                self.assertEqual(observation['patient'], event['patient_id'])
+                job, _ = main.get(db, 'DemoAnalysis', event['id'])
+                self.assertEqual(job['status'], 'PENDING')
+                tick += timedelta(seconds=4)
+            self.assertEqual(run['status'], 'COMPLETE')
+            self.assertEqual((run['events'][-1]['previous_zone'], run['events'][-1]['zone']), ('YELLOW', 'RED'))
+        data = self.client.get('/api/registry').json()
+        newborn = next(p for p in data['patients'] if p['id'] == 'p4')
+        self.assertEqual(newborn['contact']['mother_name'], 'Nigora Nazarova')
+        self.assertEqual(newborn['contact']['phone_display'], '+998 •• ••• •• ••')
+        self.assertEqual(data['demo_stream']['events'][-1]['zone'], 'RED')
+
     def test_seed_and_routing(self):
         data=self.client.get('/api/registry').json()
         cases={c['id']:c for c in data['cases']}
