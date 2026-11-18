@@ -1,38 +1,17 @@
-# Mehr — Perinatal care
+# MehrAI
 
-A colorful DMED-inspired perinatal monitoring prototype built from the supplied maternal AI agent plan. Next.js 15, React 19, TypeScript, Lucide icons; a separate FastAPI/SQLite backend prototype.
-
-## Run the interface
+Perinatal registry and follow-up workflow using synthetic patient, clinician, and appointment records.
 
 ```sh
-npm install
-npm run dev
-```
-
-Open http://localhost:3000. `npm run build` creates a static production interface in `out/`.
-
-## Demo walkthrough
-
-- Search/filter the registry by patient, clinic, cohort, risk, or doctor.
-- Select a patient to inspect observations and accept or transfer a case.
-- Open **Demo simulyator** to inject maternal or newborn observations and run accelerated escalation.
-- Use **AI qo‘ng‘iroqlar** to hear browser speech and simulate confirmation/rescheduling. Uzbek voice availability depends on the browser/OS.
-- Explore appointments, clinic breakdowns, and risk analysis. Export filtered records as CSV.
-
-## Backend
-
-See [backend/README.md](backend/README.md) for installation, endpoints, and tests. The API provides mock DMED endpoints, persistent triage records, routing, scheduling, ETags, idempotency, quiet hours, escalation, and simulated voice webhooks.
-
-**The hosted UI uses independent in-memory demo state and is not connected to the Python API.** Reloading resets it. The backend can be run and evaluated separately. Its four plan seed patients differ from the interface's eight illustrative records. Wiring the UI to the API, authentication, real DMED OAuth, VoiceLab, Telegram, and clinical validation are remaining production integration work.
-
-No real patient data, calls, medical bookings, or emergency notifications are sent. The risk rules are prototype rules supplied in the brief, not a validated clinical decision system. No official DMED affiliation is claimed.
-
-## Checks
-
-```sh
-npm run typecheck
+npm ci
+python3 -m venv backend/.venv
+backend/.venv/bin/pip install -r backend/requirements.txt
 npm run build
-backend/.venv/bin/python -m unittest backend.test_backend -v
+backend/.venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
-Design: blue/cyan DMED-inspired identity, teal care accents, distinct coral/amber/mint risk states, responsive sidebar and registry, patient drawer, and voice workflow panel. Original style reference: https://dmed.uz/en.
+Open http://127.0.0.1:8000. FastAPI serves the app and API from the same process. Case acceptance, reassignment, appointments and manual outreach outcomes persist in SQLite. Run an independent sample session with `DMED_DB=/path/to/sample.sqlite3` before starting the server.
+
+The private static site shows an explicitly read-only preview. Local mutations require the sample API. No live DMED connection or phone transport is configured. Staff can record the outcome of a sample contact; a reschedule request leaves the appointment time unchanged until a new time is agreed.
+
+See [backend/README.md](backend/README.md) for the local API contract and limits. Use only sample data with this unauthenticated local service.

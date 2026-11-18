@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Header, Response
@@ -32,6 +33,7 @@ def connect():
         db.close()
 
 def put(db, kind, rid, payload, version=1):
+    if kind == 'Case': payload['updated_at'] = stamp()
     db.execute('INSERT OR REPLACE INTO resources VALUES(?,?,?,?)', (kind,rid,json.dumps(payload),version))
 
 def get(db, kind, rid):
@@ -41,6 +43,13 @@ def get(db, kind, rid):
 
 def all_of(db, kind):
     return [json.loads(r['payload']) for r in db.execute('SELECT payload FROM resources WHERE kind=? ORDER BY rowid',(kind,))]
+
+def audit(db, case_id, action, detail, actor='local-operator'):
+    event = {'id':str(uuid4()),'case_id':case_id,'action':action,'at':stamp(),
+             'actor':actor,'mode':'mock','detail':detail}
+    put(db,'AuditEvent',event['id'],event)
+    return event
+
 
 def init():
     with connect() as db:
@@ -72,6 +81,16 @@ def ingest(db, patient_id, observation):
     key = hashlib.sha256(f"{patient_id}:{oid}:{risk['risk_zone']}".encode()).hexdigest()
     duplicate = db.execute('SELECT case_id FROM idempotency WHERE key=?',(key,)).fetchone()
     if duplicate: return get(db,'Case',duplicate['case_id'])[0]
+    for task in all_of(db, 'Call'):
+        if task['case_id'] == patient_id and task['status'] in ('READY', 'QUEUED', 'NO_ANSWER', 'RESCHEDULE_REQUESTED'):
+            task['status'] = 'SUPERSEDED'
+            put(db, 'Call', task['id'], task)
+    if risk['risk_zone'] != 'YELLOW':
+        for appointment in all_of(db, 'Appointment'):
+            if appointment['patient'] == patient_id and appointment['status'] in ('proposed', 'booked'):
+                _, version = get(db, 'Appointment', appointment['id'])
+                appointment['status'] = 'cancelled'
+                put(db, 'Appointment', appointment['id'], appointment, version + 1)
     put(db,'Observation',oid,{'id':oid,'patient':patient_id,**observation})
     case = {'id':patient_id,'patient_id':patient_id,'cohort_type':patient['cohort_type'],**risk,
             'observation':observation,'created_at':stamp(),'status':'ROUTINE','assigned_practitioner_id':None}
@@ -109,7 +128,7 @@ def queue_call(db,case,observation_id='manual'):
     if case['risk_zone']!='RED' and (local.hour>=21 or (local.hour,local.minute)<(8,30)):
         due=local.replace(hour=8,minute=30,second=0,microsecond=0)
         if due<local: due+=timedelta(days=1)
-    call={'id':cid,'case_id':case['id'],'mode':'simulation','status':'QUEUED' if due>local else 'READY','scheduled_at':stamp(due), 'target_role':'RELATED_PERSON' if case['risk_zone']=='RED' else 'MOTHER_OF_NEWBORN' if case['cohort_type']=='NEONATAL' else 'PATIENT','attempts':0}
+    call={'id':cid,'case_id':case['id'],'mode':'simulation','status':'QUEUED' if due>local else 'READY','scheduled_at':stamp(due), 'target_role':'RELATED_PERSON' if case['risk_zone']=='RED' else 'MOTHER_OF_NEWBORN' if case['cohort_type']=='NEONATAL' else 'PATIENT','attempts':0,'case_version':case['created_at']}
     put(db,'Call',cid,call)
     return call
 
@@ -138,6 +157,7 @@ def process_due(db):
 async def worker():
     while True:
         with connect() as db:
+            db.execute('BEGIN IMMEDIATE')
             process_due(db)
         await asyncio.sleep(1)
 
@@ -151,16 +171,18 @@ async def lifespan(app):
     try: await task
     except asyncio.CancelledError: pass
 
-app=FastAPI(title='DMED Perinatal — synthetic integration simulator',lifespan=lifespan)
-app.add_middleware(CORSMiddleware,allow_origins=['http://localhost:3000','http://127.0.0.1:3000','http://localhost:5173'],allow_methods=['*'],allow_headers=['*'],expose_headers=['ETag'])
+app=FastAPI(title='MehrAI — sample perinatal workspace',lifespan=lifespan)
+CORS_ORIGINS = [origin.strip() for origin in os.getenv('CORS_ORIGINS','http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://localhost:8000,http://127.0.0.1:8000').split(',') if origin.strip()]
+app.add_middleware(CORSMiddleware,allow_origins=CORS_ORIGINS,allow_methods=['*'],allow_headers=['*'],expose_headers=['ETag'])
 
 @app.get('/api/registry')
 def registry():
-    with connect() as db: return {'mode':'mock','patients':all_of(db,'Patient'),'cases':all_of(db,'Case'),'doctors':all_of(db,'PractitionerRole'),'calls':all_of(db,'Call')}
+    with connect() as db: return {'mode':'mock','patients':all_of(db,'Patient'),'cases':all_of(db,'Case'),'doctors':all_of(db,'PractitionerRole'),'calls':all_of(db,'Call'),'appointments':all_of(db,'Appointment'),'audit':all_of(db,'AuditEvent')}
 
 @app.post('/api/simulate/{scenario}')
 def simulate(scenario:str):
     with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
         if scenario=='fast-forward': return [escalate(db,c) for c in all_of(db,'Case') if c['status']=='PENDING_DOCTOR_ACK']
         if scenario not in ('maternal-red','neonatal-red'): raise HTTPException(404,'Unknown scenario')
         pid='p3' if scenario=='maternal-red' else 'p4'
@@ -172,14 +194,59 @@ def simulate(scenario:str):
 @app.post('/api/cases/{case_id}/{action}')
 def case_action(case_id:str,action:str):
     with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
         case,_=get(db,'Case',case_id)
-        if action=='busy': return escalate(db,case)
-        if action=='call': return queue_call(db,case)
+        if action=='busy':
+            if case['status']!='PENDING_DOCTOR_ACK': raise HTTPException(409,'Only a pending emergency can be handed over')
+            result=escalate(db,case)
+            audit(db,case_id,'busy','Case handed over; notification transport is simulated')
+            return result
+        if action=='call':
+            if case['risk_zone'] not in ('RED','YELLOW'): raise HTTPException(409,'Outreach requires an assessed red or yellow case')
+            result=queue_call(db,case)
+            audit(db,case_id,'call','Simulated outreach queued; no external call placed')
+            return result
         if action!='accept': raise HTTPException(404,'Unknown action')
         if case['status'] not in ('PENDING_DOCTOR_ACK','ESCALATED','APPOINTMENT_BOOKED','REVIEW_REQUIRED'): raise HTTPException(409,'Case cannot be accepted in current state')
         case.update(status='DOCTOR_ACCEPTED',accepted_at=stamp())
         put(db,'Case',case_id,case)
+        audit(db,case_id,'accept','Case acknowledgment recorded')
         return case
+
+class OutreachOutcome(BaseModel):
+    outcome: Literal['REACHED', 'CONFIRMED', 'RESCHEDULE_REQUESTED', 'NO_ANSWER']
+    attempt_id: str
+
+@app.post('/api/outreach/{call_id}/outcome')
+def record_outreach(call_id: str, attempt: OutreachOutcome):
+    """Record a staff-reported result against a sample outreach task."""
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        call, _ = get(db, 'Call', call_id)
+        case, _ = get(db, 'Case', call['case_id'])
+        key = f'outreach:{call_id}:{attempt.attempt_id}'
+        if db.execute('SELECT 1 FROM idempotency WHERE key=?', (key,)).fetchone():
+            return call
+        if call['status'] not in ('READY', 'QUEUED', 'NO_ANSWER', 'RESCHEDULE_REQUESTED'):
+            raise HTTPException(409, 'Aloqa vazifasi yakunlangan')
+        if call.get('case_version') and call['case_version'] != case['created_at']:
+            raise HTTPException(409, 'Yangi kuzatuv kiritilgan. Joriy aloqa vazifasini oching.')
+        if attempt.outcome in ('CONFIRMED', 'RESCHEDULE_REQUESTED'):
+            if case['risk_zone'] != 'YELLOW' or not case.get('appointment_id'):
+                raise HTTPException(409, 'Bu holatda rejali qabul mavjud emas')
+            appointment, version = get(db, 'Appointment', case['appointment_id'])
+            if appointment['status'] not in ('proposed', 'booked') or case['appointment_etag'] != f'W/"{version}"':
+                raise HTTPException(409, 'Qabul o‘zgargan. Joriy yozuvni tekshiring.')
+            if attempt.outcome == 'CONFIRMED':
+                appointment['status'] = 'booked'
+                put(db, 'Appointment', appointment['id'], appointment, version + 1)
+                case['appointment_etag'] = f'W/"{version + 1}"'
+                put(db, 'Case', case['id'], case)
+        call.update(status=attempt.outcome, attempts=call['attempts']+1, recorded_at=stamp(), mode='manual')
+        put(db, 'Call', call_id, call)
+        audit(db, case['id'], 'outreach', attempt.outcome)
+        db.execute('INSERT INTO idempotency VALUES(?,?)', (key, case['id']))
+        return call
 
 class VoiceEvent(BaseModel):
     case_id:str
@@ -250,3 +317,10 @@ def update_appointment(rid:str,payload:dict,response:Response,if_match:str|None=
         put(db,'Appointment',rid,updated,version+1)
         response.headers['ETag']=f'W/"{version+1}"'
         return updated
+
+
+# Mount last so API routes keep precedence; build the UI before starting the server.
+FRONTEND_OUTPUT = Path(__file__).resolve().parent.parent / 'out'
+if FRONTEND_OUTPUT.is_dir():
+    from fastapi.staticfiles import StaticFiles
+    app.mount('/', StaticFiles(directory=str(FRONTEND_OUTPUT), html=True), name='frontend')

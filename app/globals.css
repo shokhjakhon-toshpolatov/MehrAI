@@ -8,3 +8,35 @@
 /* Dense clinical information stays legible at normal display scaling. */
 .patient-name{font-size:11px}.patient-meta,.patient-reason,.doctor-specialty,.process-status,.process-time{font-size:10px}.patient-meta{color:#7f8fa3}.patient-reason{color:#7c8ca0}.clinical-values,.doctor-name{font-size:11px}.registry-table th{font-size:9px}.registry-tab{font-size:11px}.registry-search input,.filter-select{font-size:10px}.zone-badge{font-size:9px}.timeline-item strong{font-size:11px}.timeline-item p{font-size:10px}.timeline-item small{font-size:9px}.voice-description{font-size:11px}.voice-heading p{font-size:10px}.voice-state{font-size:10px}.voice-footnote{font-size:8px}.stat-top{font-size:12px}.stat-bottom{font-size:10px}.panel-heading p{font-size:10px}.clinic-name strong{font-size:11px}.clinic-name small{font-size:9px}.nav-item{font-size:12px}.registry-table td{padding-top:15px;padding-bottom:15px}.patient-meta{max-width:210px;white-space:normal;line-height:1.5}.patient-reason{max-width:115px}.process-status{max-width:120px}.registry-heading p{font-size:10px}.page-heading p{font-size:12px}.alert-strip p{font-size:11px}.alert-strip strong{font-size:12px}.badge{font-size:10px}.main-footer{font-size:9px}.security-note p{font-size:9px}.security-note strong{font-size:10px}
 @media(max-width:760px){.registry-table{min-width:680px}.registry-tab{font-size:10px}.patient-meta{max-width:200px}.alert-strip p{font-size:10px}.alert-strip strong{font-size:11px}.stat-top{font-size:11px}.stat-bottom{font-size:9px}.page-heading p{font-size:11px}}
+
+.mehr-brand {
+  gap: 9px;
+  font-size: 31px;
+  letter-spacing: -1.5px;
+}
+.mehr-brand-ai { color: #087a75; }
+.workspace-status {
+  padding: 9px 12px;
+  margin-bottom: 16px;
+  border: 1px solid #d4e3f5;
+  border-radius: 7px;
+  background: #eff6ff;
+  color: #31587d;
+  font-size: 11px;
+}
+.workflow-empty { padding: 4px 20px 17px; color: #536b84; font-size: 12px; }
+.workflow-footer { padding: 0 14px 14px; }
+.urgent-work { border-left: 4px solid #dc253d; }
+.outreach-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--line);
+}
+.outreach-row p { margin-top: 4px; color: #627790; font-size: 11px; }
+.outreach-row strong { font-size: 11px; }
+.outreach-row form { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+.outreach-row select { max-width: 100%; padding: 7px; border: 1px solid #cdd9e6; background: #fff; border-radius: 6px; }
+.zone-review { background: #e4ebf7; color: #284d78; }
