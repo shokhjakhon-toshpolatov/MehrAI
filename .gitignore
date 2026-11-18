@@ -2,11 +2,31 @@ node_modules/
 .next/
 out/
 .env*
-/voice_lab_api.txt
+*.env
+*.env.*
+
+# Private service notes, including copies and backups in subdirectories.
+voice_lab_api*.txt*
+voice_lab_api*.bak
+voice_lab_api*.backup
+voice_lab_api*.old
+
+# Local credentials, private keys, and runtime logs.
+credentials.json
+secrets.json
+service-account*.json
+secrets/
+credentials/
+*.pem
+*.key
+*.p12
+*.pfx
+*.log
 *.tsbuildinfo
 __pycache__/
 .pytest_cache/
 *.db
+*.db-*
 .venv/
 
 *.sqlite3
