@@ -2,7 +2,7 @@ export type Zone = 'RED' | 'YELLOW' | 'GREEN' | 'REVIEW';
 export type Patient = {
   id: string; name: string; age: number; cohort: 'MATERNAL' | 'NEONATAL' | 'POSTPARTUM';
   stage: string; clinic: string; zone: Zone; reason: string; vitals: string[];
-  doctor: string; status: string; time: string;
+  contactPhone?: string; doctor: string; status: string; time: string; timeAt?: string;
   statusCode?: string; deadline?: string; updatedAt?: string; appointmentAt?: string; referralStatus?: string;
   motherId?: string; followUpAt?: string; followUpCompletedAt?: string; assessedAt?: string; assessedBy?: string;
 };

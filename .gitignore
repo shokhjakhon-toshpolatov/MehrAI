@@ -2,6 +2,7 @@ node_modules/
 .next/
 out/
 .env*
+/voice_lab_api.txt
 *.tsbuildinfo
 __pycache__/
 .pytest_cache/

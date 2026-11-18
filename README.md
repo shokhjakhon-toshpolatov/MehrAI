@@ -2,6 +2,10 @@
 
 Perinatal registry and follow-up workflow using synthetic patient, clinician, and appointment records.
 
+For one-click startup, open `run.py` and press your editor's **Run** button (or run `python run.py`). Install Python 3.10+ and Node.js first. The launcher installs dependencies on first use, builds the frontend, starts the local server, and opens your browser. Keep it running while using the app; press **Ctrl+C** to stop.
+
+Manual setup:
+
 ```sh
 npm ci
 python3 -m venv backend/.venv

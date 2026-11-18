@@ -1,11 +1,89 @@
 import tempfile
 import unittest
+from unittest.mock import patch
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from fastapi.testclient import TestClient
 from . import main
 from .risk import evaluate
 
 class BackendTests(unittest.TestCase):
+    def test_handset_call_is_deduplicated_and_status_comes_from_provider(self):
+        from uuid import uuid4
+        import httpx
+        config = {'TWILIO_ACCOUNT_SID': 'AC' + 'a'*32, 'TWILIO_AUTH_TOKEN': 'test',
+                  'TWILIO_FROM_NUMBER': '+12025550101', 'MEHRAI_TEST_PHONE': '+12025550102'}
+        sid = 'CA' + 'b'*32
+        payload = {'request_id': str(uuid4()), 'patient_id': 'p1'}
+        with patch.object(main.telephony, 'settings', return_value=config), patch.object(
+                main.telephony.httpx, 'post', return_value=httpx.Response(
+                    201, json={'sid': sid}, request=httpx.Request('POST','https://example.test'))) as post:
+            self.assertEqual(self.client.post('/api/phone/ring', json=payload).status_code, 409)
+            post.assert_not_called()
+            self.client.put('/api/patients/p1/contact', json={'phone': config['MEHRAI_TEST_PHONE']}).raise_for_status()
+            self.assertEqual(self.client.post('/api/phone/ring', json=payload).json()['outcome'], 'QUEUED')
+            self.client.post('/api/phone/ring', json=payload).raise_for_status()
+            self.assertEqual(self.client.post('/api/phone/ring',json={'request_id':str(uuid4())}).status_code, 409)
+            self.assertEqual(post.call_count, 1)
+            self.assertEqual(post.call_args.kwargs['data']['To'], config['MEHRAI_TEST_PHONE'])
+            with patch.object(main.telephony,'lookup',side_effect=[('ringing',None),('completed',12)]):
+                url = '/api/phone/ring/' + payload['request_id']
+                self.assertEqual(self.client.get(url).json()['outcome'],'RINGING')
+                self.assertEqual(self.client.get(url).json()['duration_seconds'],12)
+            attempts = self.client.get('/api/registry').json()['attempt_history']
+            self.assertEqual([(a['channel'],a['outcome']) for a in attempts],[('live_test','COMPLETED')])
+
+    def test_uncertain_dial_is_never_replayed(self):
+        from uuid import uuid4
+        import httpx
+        config = {'TWILIO_ACCOUNT_SID': 'AC' + 'a'*32, 'TWILIO_AUTH_TOKEN':'test',
+                  'TWILIO_FROM_NUMBER':'+12025550101', 'MEHRAI_TEST_PHONE':'+12025550102'}
+        payload = {'request_id': str(uuid4())}
+        with patch.object(main.telephony, 'settings', return_value=config), patch.object(
+                main.telephony, 'dial', side_effect=httpx.ReadTimeout('timeout')) as dial:
+            for _ in range(2):
+                self.assertEqual(self.client.post('/api/phone/ring', json=payload).json()['outcome'], 'UNKNOWN')
+            self.assertEqual(dial.call_count, 1)
+
+    def test_demo_retry_schedule_and_attempt_history(self):
+        start = datetime(2026, 11, 18, 5, 0, tzinfo=timezone.utc)  # 10:00 Tashkent
+        with patch.object(main, 'now', return_value=start):
+            call = self.client.post('/api/cases/p1/call').json()
+            url = f"/api/outreach/{call['id']}/outcome"
+            data = {'channel':'ai_demo', 'outcome':'NO_ANSWER', 'attempt_id':'first'}
+            self.assertEqual(self.client.post(url,json=data).json()['attempts'], 1)
+            self.assertEqual(self.client.post(url,json=data).json()['attempts'], 1)
+        for offset in (5, 10, 1440, 1445, 1450):
+            due = start + timedelta(minutes=offset)
+            with patch.object(main, 'now', return_value=due), main.connect() as db:
+                db.execute('BEGIN IMMEDIATE')
+                current, _ = main.get(db, 'Call', call['id'])
+                self.assertEqual(datetime.fromisoformat(current['scheduled_at']), due)
+                main.process_due(db)
+                main.process_due(db)
+        result = self.client.get('/api/registry').json()
+        self.assertEqual(len(result['attempt_history']), 6)
+        current = next(x for x in result['calls'] if x['id'] == call['id'])
+        self.assertEqual(current['status'], 'STAFF_FOLLOW_UP')
+
+    def test_phone_persists_and_manual_contact_ends_simulated_retries(self):
+        url = '/api/patients/p1/contact'
+        self.assertEqual(self.client.put(url,json={'phone':'invalid'}).status_code, 422)
+        self.client.put(url,json={'phone':'+12025550100'}).raise_for_status()
+        main.init()
+        patient = next(p for p in self.client.get('/api/registry').json()['patients'] if p['id']=='p1')
+        self.assertEqual(patient['contact_phone'], '+12025550100')
+        call = self.client.post('/api/cases/p1/call').json()
+        path = f"/api/outreach/{call['id']}/outcome"
+        self.client.post(path,json={'outcome':'NO_ANSWER','attempt_id':'a','channel':'ai_demo'}).raise_for_status()
+        self.client.post(path,json={'outcome':'REACHED','attempt_id':'b','duration_seconds':47}).raise_for_status()
+        with patch.object(main, 'now', return_value=main.now()+timedelta(days=2)), main.connect() as db:
+            main.process_due(db)
+        result = self.client.get('/api/registry').json()
+        self.assertEqual([a['channel'] for a in result['attempt_history']], ['ai_demo','doctor'])
+        self.assertEqual(result['attempt_history'][1]['duration_seconds'], 47)
+        self.assertEqual(next(c for c in result['calls'] if c['id']==call['id'])['status'],'REACHED')
+
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory()
         main.DB=str(Path(self.tmp.name)/'test.db')

@@ -1,6 +1,7 @@
 import type { Patient } from "./demo";
 
 export type Outreach = {
+  retryChannel?: string;
   id: string;
   patientId: string;
   patientName: string;
@@ -31,7 +32,13 @@ export type Appointment = {
 };
 export type OutreachOutcome =
   "REACHED" | "CONFIRMED" | "RESCHEDULE_REQUESTED" | "NO_ANSWER";
+export type ContactAttempt = {
+  id: string; case_id: string | null; call_id: string; channel: "doctor" | "ai_demo" | "live_test";
+  outcome: OutreachOutcome | "SUBMITTING" | "QUEUED" | "RINGING" | "IN_PROGRESS" | "COMPLETED" | "BUSY" | "FAILED" | "CANCELLED" | "CONFIG_ERROR" | "REJECTED" | "UNKNOWN";
+  started_at: string; duration_seconds: number | null;
+};
 export type RegistryResult = {
+  history: ContactAttempt[];
   appointments: Appointment[];
   patients: Patient[];
   calls: Outreach[];
@@ -47,6 +54,7 @@ type ApiPatient = {
   mother_id?: string;
   postpartum_days?: number;
   age?: number;
+  contact_phone?: string;
   age_days?: number;
   gestational_weeks?: number;
   clinic: string;
@@ -70,6 +78,7 @@ type ApiCase = {
   assessed_by?: string;
 };
 type ApiCall = {
+  retry_channel?: string;
   id: string;
   case_id: string;
   target_role: string;
@@ -80,6 +89,7 @@ type ApiCall = {
   attempts: number;
 };
 type ApiRegistry = {
+  attempt_history?: ContactAttempt[];
   appointments?: Appointment[];
   mode: "mock" | "live";
   patients: ApiPatient[];
@@ -122,6 +132,8 @@ const callStatuses: Record<string, string> = {
   RESCHEDULE_REQUESTED: "Boshqa vaqt so‘ralgan",
   NO_ANSWER: "Javob olinmagan",
   REACHED: "Bog‘lanildi",
+  STAFF_FOLLOW_UP: "Xodim bog‘lanishi kerak",
+  CANCELLED: "Bekor qilindi",
   SUPERSEDED: "Yangi kuzatuv bilan almashtirildi",
 };
 
@@ -251,6 +263,7 @@ export async function loadRegistry(): Promise<RegistryResult> {
       followUpAt: c.follow_up_at,
       followUpCompletedAt: c.follow_up_completed_at,
       clinic: p.clinic,
+      contactPhone: p.contact_phone,
       zone: c.risk_zone as Patient["zone"],
       reason: c.risk_reasons.length
         ? c.risk_reasons.join(" · ")
@@ -265,6 +278,7 @@ export async function loadRegistry(): Promise<RegistryResult> {
       updatedAt: c.updated_at ?? c.created_at,
       appointmentAt: c.appointment_time ?? undefined,
       referralStatus: c.referral_status,
+      timeAt: c.follow_up_completed_at ?? c.follow_up_at ?? c.appointment_time ?? undefined,
       time: displayDate(
         c.follow_up_completed_at ??
           c.follow_up_at ??
@@ -288,6 +302,7 @@ export async function loadRegistry(): Promise<RegistryResult> {
     statusLabel: `${callStatuses[c.status] ?? c.status}`,
     simulated: c.mode === "simulation",
     scheduledAt: c.scheduled_at,
+    retryChannel: c.retry_channel,
     appointmentId: c.appointment_id,
     attempts: c.attempts,
   }));
@@ -300,6 +315,7 @@ export async function loadRegistry(): Promise<RegistryResult> {
         ? (doctorIds[visit.practitioner] ?? visit.practitioner)
         : undefined,
     })),
+    history: (data.attempt_history ?? []).sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at)),
     source: data.mode,
     audit: data.audit ?? [],
   };
@@ -312,14 +328,35 @@ export async function performCaseAction(
   await request(`/api/cases/${encodeURIComponent(id)}/${action}`, "POST");
 }
 
+export function openContact(id: string) {
+  return request<{ id: string }>(`/api/cases/${encodeURIComponent(id)}/call`, "POST");
+}
+export function phoneSetup() {
+  return request<{ missing: string[]; last_four: string }>("/api/phone/setup");
+}
+export function ringHandset(requestId: string, patientId?: string) {
+  return request<{ outcome: ContactAttempt["outcome"] }>("/api/phone/ring", "POST",
+    { request_id: requestId, patient_id: patientId });
+}
+export function cancelRetries(id: string) {
+  return request(`/api/outreach/${encodeURIComponent(id)}/cancel-retries`, "POST");
+}
+export function savePhone(id: string, phone: string) {
+  return request(`/api/patients/${encodeURIComponent(id)}/contact`, "PUT", { phone });
+}
+export function checkVoiceLab() {
+  return request<{ status: "connected" | "missing_key" | "permission_denied" | "unavailable" }>("/api/voicelab/connection");
+}
 export function recordOutcome(
   id: string,
   outcome: OutreachOutcome,
   attemptId: string,
+  details?: { duration_seconds?: number; channel?: "doctor" | "ai_demo"; started_at?: string },
 ) {
   return request(`/api/outreach/${encodeURIComponent(id)}/outcome`, "POST", {
     outcome,
     attempt_id: attemptId,
+    ...details,
   });
 }
 export function runScenario(

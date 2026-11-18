@@ -7,7 +7,7 @@ import sqlite3
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -15,6 +15,9 @@ from fastapi import FastAPI, HTTPException, Header, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from .risk import evaluate
+from .voicelab import check_connection
+from . import telephony
+import httpx
 from .seed import PATIENTS, DOCTORS, POSTPARTUM_SAMPLE_ASSESSMENTS
 
 DB = os.getenv('DMED_DB', str(Path(__file__).with_name('demo.sqlite3')))
@@ -221,7 +224,16 @@ def process_due(db):
             audit(db, case['id'], 'attendance', case['status'])
     for call in all_of(db,'Call'):
         if call['status']=='QUEUED' and datetime.fromisoformat(call['scheduled_at'])<=now():
-            call['status']='READY';put(db,'Call',call['id'],call)
+            if call.get('retry_channel') == 'ai_demo':
+                case, _ = get(db, 'Case', call['case_id'])
+                if (case['created_at'] != call['case_version'] or case.get('appointment_id') != call.get('appointment_id')
+                        or case['status'] == 'ATTENDED'):
+                    call['status'] = 'SUPERSEDED'
+                    put(db, 'Call', call['id'], call)
+                else:
+                    log_attempt(db, call, 'ai_demo', 'NO_ANSWER', None)
+            else:
+                call['status']='READY';put(db,'Call',call['id'],call)
 
 
 async def worker():
@@ -231,15 +243,29 @@ async def worker():
             process_due(db)
         await asyncio.sleep(1)
 
+async def track_handset_calls():
+    while True:
+        with connect() as db:
+            pending = [a['id'][5:] for a in all_of(db,'ContactAttempt')
+                       if a['channel'] == 'live_test' and a['outcome'] in ('QUEUED','RINGING','IN_PROGRESS')]
+        for rid in pending:
+            try:
+                await asyncio.to_thread(ring_status, UUID(rid))
+            except HTTPException:
+                pass  # A read can be retried; dialing is never repeated here.
+        await asyncio.sleep(5 if pending else 8)
+
 @asynccontextmanager
 async def lifespan(app):
     if os.getenv('DMED_MODE','mock')!='mock': raise RuntimeError('Only mock mode implemented; sandbox requires verified API contract and credentials')
     init()
-    task=asyncio.create_task(worker())
-    yield
-    task.cancel()
-    try: await task
-    except asyncio.CancelledError: pass
+    tasks = [asyncio.create_task(worker()), asyncio.create_task(track_handset_calls())]
+    try:
+        yield
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 app=FastAPI(title='MehrAI — sample perinatal workspace',lifespan=lifespan)
 CORS_ORIGINS = [origin.strip() for origin in os.getenv('CORS_ORIGINS','http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://localhost:8000,http://127.0.0.1:8000').split(',') if origin.strip()]
@@ -247,7 +273,137 @@ app.add_middleware(CORSMiddleware,allow_origins=CORS_ORIGINS,allow_methods=['*']
 
 @app.get('/api/registry')
 def registry():
-    with connect() as db: return {'mode':'mock','patients':[{k: v for k, v in p.items() if k != 'telecom'} for p in all_of(db,'Patient')],'cases':all_of(db,'Case'),'doctors':all_of(db,'PractitionerRole'),'calls':all_of(db,'Call'),'appointments':all_of(db,'Appointment'),'audit':all_of(db,'AuditEvent')}
+    with connect() as db: return {'mode':'mock','patients':[{k: v for k, v in p.items() if k != 'telecom'} for p in all_of(db,'Patient')],'cases':all_of(db,'Case'),'doctors':all_of(db,'PractitionerRole'),'calls':all_of(db,'Call'),'attempt_history':all_of(db,'ContactAttempt'),'appointments':all_of(db,'Appointment'),'audit':all_of(db,'AuditEvent')}
+
+@app.get('/api/voicelab/connection')
+def voicelab_connection():
+    return check_connection()
+
+class RingRequest(BaseModel):
+    request_id: UUID
+    patient_id: str | None = None
+
+@app.get('/api/phone/setup')
+def phone_setup():
+    config = telephony.settings()
+    return {'missing': telephony.missing(config), 'last_four': config.get('MEHRAI_TEST_PHONE','')[-4:]}
+
+@app.post('/api/phone/ring')
+def ring_test(body: RingRequest):
+    config = telephony.settings()
+    missing = telephony.missing(config)
+    if missing:
+        raise HTTPException(503, 'Telefon sozlamalari: ' + ', '.join(missing))
+    rid = 'ring-' + str(body.request_id)
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        if body.patient_id:
+            patient, _ = get(db, 'Patient', body.patient_id)
+            if patient.get('contact_phone') != config['MEHRAI_TEST_PHONE']:
+                raise HTTPException(409, 'Faqat tasdiqlangan sinov raqamiga ruxsat berilgan')
+        for entry in reversed(all_of(db, 'ContactAttempt')):
+            if entry['id'] == rid:
+                return {'id': rid, 'outcome': entry['outcome']}
+            if entry['channel'] == 'live_test' and datetime.fromisoformat(entry['started_at']) > now()-timedelta(minutes=2):
+                raise HTTPException(409, 'Sinov qo‘ng‘irog‘i yaqinda yuborilgan')
+        entry = {'id': rid, 'case_id': body.patient_id, 'call_id': rid, 'channel':'live_test',
+                 'outcome':'SUBMITTING', 'started_at':stamp(), 'duration_seconds': None}
+        put(db, 'ContactAttempt', rid, entry)
+    try:
+        telephony.calls_url(config)
+        instructions = telephony.greeting(config)
+    except (ValueError, KeyError, httpx.HTTPError):
+        entry['outcome'] = 'CONFIG_ERROR'
+    else:
+        try:
+            entry['provider_sid'] = telephony.dial(config, instructions)
+            entry['outcome'] = 'QUEUED'
+        except httpx.HTTPStatusError as exc:
+            entry['outcome'] = 'REJECTED' if 400 <= exc.response.status_code < 500 else 'UNKNOWN'
+        except (ValueError, KeyError, httpx.HTTPError):
+            entry['outcome'] = 'UNKNOWN'
+    with connect() as db:
+        put(db, 'ContactAttempt', rid, entry)
+    return {'id': rid, 'outcome':entry['outcome']}
+
+@app.get('/api/phone/ring/{request_id}')
+def ring_status(request_id: UUID):
+    rid = 'ring-' + str(request_id)
+    with connect() as db:
+        entry, _ = get(db, 'ContactAttempt', rid)
+    active = ('QUEUED', 'RINGING', 'IN_PROGRESS')
+    if entry['outcome'] in active:
+        statuses = {'queued':'QUEUED', 'initiated':'QUEUED', 'ringing':'RINGING', 'in-progress':'IN_PROGRESS',
+                    'completed':'COMPLETED','busy':'BUSY','no-answer':'NO_ANSWER','failed':'FAILED','canceled':'CANCELLED'}
+        try:
+            status, duration = telephony.lookup(telephony.settings(), entry['provider_sid'])
+        except (httpx.HTTPError, ValueError, KeyError):
+            raise HTTPException(503, 'Qo‘ng‘iroq holatini tekshirib bo‘lmadi')
+        with connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            entry, _ = get(db, 'ContactAttempt', rid)
+            if entry['outcome'] in active and status in statuses:
+                entry.update(outcome=statuses[status], duration_seconds=duration)
+                put(db,'ContactAttempt',rid,entry)
+    return {'id': rid, 'outcome': entry['outcome'], 'duration_seconds': entry['duration_seconds']}
+
+class ContactNumber(BaseModel):
+    phone: str = Field(pattern=r'^(?:\+[1-9][0-9]{7,14})?$')
+
+@app.put('/api/patients/{patient_id}/contact')
+def save_contact_number(patient_id: str, contact: ContactNumber):
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        patient, version = get(db, 'Patient', patient_id)
+        if patient.get('contact_phone') != contact.phone:
+            patient['contact_phone'] = contact.phone
+            put(db, 'Patient', patient_id, patient, version + 1)
+            for call in all_of(db, 'Call'):
+                if call['case_id'] == patient_id and call.get('retry_channel') and call['status'] in ('QUEUED','READY'):
+                    call['status'] = 'SUPERSEDED'
+                    put(db, 'Call', call['id'], call)
+        return {'phone': contact.phone}
+
+def log_attempt(db, call, channel, outcome, duration, started_at=None):
+    at = now()
+    number = call['attempts'] + 1
+    aid = f"{call['id']}:{number}"
+    put(db, 'ContactAttempt', aid, {
+        'id': aid, 'case_id': call['case_id'], 'call_id': call['id'],
+        'channel': channel, 'outcome': outcome, 'started_at': started_at or stamp(at),
+        'duration_seconds': duration if outcome != 'NO_ANSWER' else None,
+    })
+    call.update(attempts=number, status=outcome, recorded_at=stamp(at))
+    call.pop('retry_channel', None)
+    if outcome == 'NO_ANSWER':
+        if number < 6:
+            if number == 1:
+                call['first_missed_at'] = stamp(at)
+            due = at + timedelta(minutes=5)
+            if number == 3:
+                first = datetime.fromisoformat(call.get('first_missed_at', stamp(at))).astimezone(TZ)
+                due = (at.astimezone(TZ) + timedelta(days=1)).replace(
+                    hour=first.hour, minute=first.minute, second=first.second, microsecond=0)
+            local = due.astimezone(TZ)
+            if local.hour >= 21:
+                local = (local + timedelta(days=1)).replace(hour=8, minute=30, second=0, microsecond=0)
+            elif (local.hour, local.minute) < (8, 30):
+                local = local.replace(hour=8, minute=30, second=0, microsecond=0)
+            call.update(status='QUEUED', scheduled_at=stamp(local), retry_channel=channel)
+        else:
+            call['status'] = 'STAFF_FOLLOW_UP'
+    put(db, 'Call', call['id'], call)
+
+@app.post('/api/outreach/{call_id}/cancel-retries')
+def cancel_retries(call_id: str):
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        call, _ = get(db, 'Call', call_id)
+        if call.get('retry_channel') and call['status'] in ('QUEUED', 'READY'):
+            call.pop('retry_channel')
+            call['status'] = 'CANCELLED'
+            put(db, 'Call', call_id, call)
+        return call
 
 @app.post('/api/simulate/{scenario}')
 def simulate(scenario:str):
@@ -396,6 +552,9 @@ def apply_appointment_outcome(db, case, outcome):
 class OutreachOutcome(BaseModel):
     outcome: Literal['REACHED', 'CONFIRMED', 'RESCHEDULE_REQUESTED', 'NO_ANSWER']
     attempt_id: str
+    duration_seconds: int | None = Field(default=None, ge=0, le=86400)
+    channel: Literal['doctor', 'ai_demo'] = 'doctor'
+    started_at: datetime | None = None
 
 @app.post('/api/outreach/{call_id}/outcome')
 def record_outreach(call_id: str, attempt: OutreachOutcome):
@@ -415,8 +574,20 @@ def record_outreach(call_id: str, attempt: OutreachOutcome):
             if call.get('appointment_id') != case.get('appointment_id'):
                 raise HTTPException(409, 'Bu aloqa vazifasi joriy qabulga tegishli emas')
             apply_appointment_outcome(db, case, attempt.outcome)
-        call.update(status=attempt.outcome, attempts=call['attempts']+1, recorded_at=stamp(), mode='manual')
-        put(db, 'Call', call_id, call)
+        if attempt.channel == 'ai_demo' and attempt.outcome not in ('REACHED', 'NO_ANSWER'):
+            raise HTTPException(422, 'Demo natijasi noto‘g‘ri')
+        started = attempt.started_at
+        if started and (started.tzinfo is None or started > now() + timedelta(minutes=1)):
+            raise HTTPException(422, 'Qo‘ng‘iroq vaqti noto‘g‘ri')
+        call['mode'] = 'simulation' if attempt.channel == 'ai_demo' else 'manual'
+        log_attempt(db, call, attempt.channel, attempt.outcome, attempt.duration_seconds,
+                    stamp(started) if started else None)
+        if attempt.outcome != 'NO_ANSWER':
+            for other in all_of(db, 'Call'):
+                if other['case_id'] == case['id'] and other.get('retry_channel') and other['status'] in ('QUEUED','READY'):
+                    other['status'] = 'CANCELLED'
+                    other.pop('retry_channel')
+                    put(db, 'Call', other['id'], other)
         audit(db, case['id'], 'outreach', attempt.outcome)
         db.execute('INSERT INTO idempotency VALUES(?,?)', (key, case['id']))
         return call
