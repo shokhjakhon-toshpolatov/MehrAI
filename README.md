@@ -1,50 +1,38 @@
-# DMED-inspired perinatal workspace
+# Mehr — Perinatal care
 
-Next.js/React clinical workflow interface and a connected FastAPI/SQLite development backend. The workspace prioritizes urgent cases, patient records, appointments, outreach tasks, and facility-level monitoring. Bright red, yellow, and green encode risk, reinforced by explicit labels and icons.
+A colorful DMED-inspired perinatal monitoring prototype built from the supplied maternal AI agent plan. Next.js 15, React 19, TypeScript, Lucide icons; a separate FastAPI/SQLite backend prototype.
 
-## Run the connected application locally
+## Run the interface
 
 ```sh
 npm install
-python3 -m venv backend/.venv
-backend/.venv/bin/pip install -r backend/requirements.txt
-npm run build
-backend/.venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000
+npm run dev
 ```
 
-Open **http://127.0.0.1:8000**. FastAPI serves the built interface and API. Local browser sessions automatically use port 8000. For frontend hot reload, also run `npm run dev` and open http://localhost:3000.
+Open http://localhost:3000. `npm run build` creates a static production interface in `out/`.
 
-Accepting a case, handing it over, and creating an outreach task use the API, persist in SQLite, and record operator audit events. UI changes are confirmed only after the API returns. Pending emergency deadlines come from the server. The UI refreshes every 30 seconds and supports manual refresh.
+## Demo walkthrough
 
-## Distinct work areas
+- Search/filter the registry by patient, clinic, cohort, risk, or doctor.
+- Select a patient to inspect observations and accept or transfer a case.
+- Open **Demo simulyator** to inject maternal or newborn observations and run accelerated escalation.
+- Use **AI qo‘ng‘iroqlar** to hear browser speech and simulate confirmation/rescheduling. Uzbek voice availability depends on the browser/OS.
+- Explore appointments, clinic breakdowns, and risk analysis. Export filtered records as CSV.
 
-- **Ish stoli:** actionable emergencies, review-required cases, planned specialist reviews, and accepted cases.
-- **Bemorlar registri:** all records, sorted by clinical priority, with cohort/clinic/risk/doctor/search filters and CSV export.
-- **Qabullar:** proposed/confirmed appointments, attendance, and missed-visit status from records.
-- **Bemorlar bilan aloqa:** provider queue records and outcomes, without browser speech or invented call results.
-- **Muassasalar:** monitored patients and risk distribution per facility.
+## Backend
 
-## Remote connection
+See [backend/README.md](backend/README.md) for installation, endpoints, and tests. The API provides mock DMED endpoints, persistent triage records, routing, scheduling, ETags, idempotency, quiet hours, escalation, and simulated voice webhooks.
 
-Set `NEXT_PUBLIC_API_URL` to the full HTTPS API origin **before building**. Configure `DMED_CORS_ORIGINS` on the backend to allow that frontend origin (comma-separated).
+**The hosted UI uses independent in-memory demo state and is not connected to the Python API.** Reloading resets it. The backend can be run and evaluated separately. Its four plan seed patients differ from the interface's eight illustrative records. Wiring the UI to the API, authentication, real DMED OAuth, VoiceLab, Telegram, and clinical validation are remaining production integration work.
 
-Without an API origin, the hosted interface explicitly displays a read-only reference registry and disables clinical mutations. Failed connections retain the last loaded records with a stale-connection notice. The private Sites publication hosts the static frontend only; the Python service is not deployed there.
+No real patient data, calls, medical bookings, or emergency notifications are sent. The risk rules are prototype rules supplied in the brief, not a validated clinical decision system. No official DMED affiliation is claimed.
 
-## Current boundary
-
-The backend operates only in `mock` mode with synthetic patients and simplified supplied risk rules. No real DMED credentials, provider calls, SMS, Telegram notifications, or emergency dispatch are configured. It is a development system, not a clinically validated or nationally deployable service. Do not expose the unauthenticated development API or enter real patient information.
-
-Production work still includes verified DMED/FHIR contracts, identity and role-based authorization, tenancy, clinical validation, authenticated provider webhooks, operational monitoring, secure production storage, and scale/reliability engineering. The interface no longer includes simulator controls or decorative voice widgets.
-
-See [backend/README.md](backend/README.md) for API setup, persistence, endpoints, and implementation limits.
-
-## Validation
+## Checks
 
 ```sh
-npm test
 npm run typecheck
 npm run build
 backend/.venv/bin/python -m unittest backend.test_backend -v
 ```
 
-Tests cover distinct navigation screens, filtering, disconnected-state write prevention, API acceptance, failed mutation handling, outreach filtering, adapter contracts, and backend persistence/routing safeguards. Visual browser QA requires a connected browser; it was unavailable in this session.
+Design: blue/cyan DMED-inspired identity, teal care accents, distinct coral/amber/mint risk states, responsive sidebar and registry, patient drawer, and voice workflow panel. Original style reference: https://dmed.uz/en.

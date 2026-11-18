@@ -29,32 +29,3 @@ The persisted worker checks emergency acknowledgment deadlines, quiet-hours call
 ## Deliberate integration limits
 
 Resource envelopes and simplified observations are demo contracts, not verified SSV/FHIR profiles. Sandbox OAuth, authenticated webhooks, real VoiceLab/Telegram transport, production authorization, multi-organization tenancy, secure clinical storage, and clinical validation require a separate integration stage. The four seed doctors have a simple deterministic local roster and weekday-independent 09:00–17:00 half-hour booking window, not a real availability feed. Multi-pathology records show all reasons but assign one primary specialty; missing observations enter `REVIEW` rather than being declared healthy. Neonatal thresholds mirror the brief and do not substitute for age/gestation-specific clinical guidance.
-
-## Connect the frontend
-
-Set the public API origin before starting or building the Next.js frontend:
-
-```sh
-NEXT_PUBLIC_API_URL=http://127.0.0.1:8000 npm run dev
-```
-
-For a static export, supply `NEXT_PUBLIC_API_URL` to `npm run build`; it is embedded in the browser bundle, so changing it requires a rebuild. Do not put secrets in this variable. Without it, a browser on `localhost` or `127.0.0.1` connects to `http://127.0.0.1:8000`. On other hosts `lib/api.ts` rejects reads and writes explicitly; the UI may provide a separately labeled, read-only reference preview. The adapter maps actual API cases and outreach records, including the `REVIEW` state, rather than mutating local sample records. This backend always identifies its source as `mock` even when connected successfully.
-
-`CORS_ORIGINS` is a comma-separated allowlist of exact frontend origins, defaulting to localhost ports 3000, 5173 and 8000, and 127.0.0.1 ports 3000 and 8000. Example for a different local origin:
-
-```sh
-CORS_ORIGINS=http://127.0.0.1:3001 backend/.venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000
-```
-
-Case acceptance, pending-emergency handover, and outreach queue requests persist to SQLite and append audit records returned by `/api/registry`. The audit actor `local-operator` is a development label, not an authenticated identity. Rejected actions do not append success audit records. A call action only queues simulated outreach; `READY` does not mean a call occurred. Run adapter tests with `node --test backend/test_frontend_adapter.cjs` after installing the frontend dependencies.
-
-## One-process local application
-
-Build the static frontend, then start the backend. FastAPI serves `out/` after all API routes when that directory exists at startup:
-
-```sh
-npm run build
-backend/.venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000
-```
-
-Open `http://127.0.0.1:8000`. The adapter detects the local hostname and connects to this same backend; no public environment variable is necessary. Restart the server after creating `out/` for the first time. A separately hosted frontend without an API URL remains an explicitly disconnected reference view. Persisted actions only become available after the API responds successfully.
