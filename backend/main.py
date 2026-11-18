@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Header, Response
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from .risk import evaluate
 from .seed import PATIENTS, DOCTORS
 
@@ -55,24 +55,37 @@ def init():
     with connect() as db:
         db.execute('CREATE TABLE IF NOT EXISTS resources(kind TEXT,id TEXT,payload TEXT,version INTEGER,PRIMARY KEY(kind,id))')
         db.execute('CREATE TABLE IF NOT EXISTS idempotency(key TEXT PRIMARY KEY, case_id TEXT)')
-        if all_of(db,'Patient'): return
+        if all_of(db,'Patient'):
+            for kind in ('Patient', 'RelatedPerson'):
+                for record in all_of(db, kind):
+                    if record.get('telecom'):
+                        _, version = get(db, kind, record['id'])
+                        record['telecom'] = []
+                        put(db, kind, record['id'], record, version + 1)
+            retire_legacy_slots(db)
+            return
         for d in DOCTORS: put(db,'PractitionerRole',d['id'],d)
         for p in PATIENTS:
             put(db,'Patient',p['id'],p)
             put(db,'DispensaryRegistration',p['id'],{'id':p['id'],'patient':p['id'],'organization':p['clinic']})
-            put(db,'RelatedPerson',f"family-{p['id']}",{'id':f"family-{p['id']}",'patient':p['id'],'name':p.get('mother_name','Family contact'),'telecom':[{'system':'phone','value':'+998930000000'}]})
+            put(db,'RelatedPerson',f"family-{p['id']}",{'id':f"family-{p['id']}",'patient':p['id'],'name':p.get('mother_name','Family contact'),'telecom':[]})
             ingest(db,p['id'],{'id':f"seed-{p['id']}",**p['observation']})
 
-def next_slot(db, doctor_id, after=None):
-    slot = (after or now()).astimezone(TZ).replace(second=0,microsecond=0)
-    slot = slot.replace(minute=0) + timedelta(hours=1)
-    occupied = {a.get('start') for a in all_of(db,'Appointment') if a.get('practitioner')==doctor_id and a.get('status')!='cancelled'}
-    for _ in range(100):
-        if slot.hour < 9: slot = slot.replace(hour=9,minute=0)
-        if slot.hour >= 17: slot = (slot+timedelta(days=1)).replace(hour=9,minute=0)
-        if stamp(slot) not in occupied: return stamp(slot)
-        slot += timedelta(minutes=30)
-    raise HTTPException(409,'No available slot')
+def retire_legacy_slots(db):
+    """Move generated sample slots back to the referral queue."""
+    for case in all_of(db, 'Case'):
+        if case['risk_zone'] != 'YELLOW' or not case.get('appointment_id'):
+            continue
+        visit, version = get(db, 'Appointment', case['appointment_id'])
+        if visit.get('source') == 'facility' or case['status'] == 'ATTENDED':
+            continue
+        visit['status'] = 'cancelled'
+        put(db, 'Appointment', visit['id'], visit, version + 1)
+        for key in ('appointment_id', 'appointment_time', 'appointment_etag', 'nurse_notified'):
+            case.pop(key, None)
+        case.update(status='REFERRED', referral_status='AWAITING_FACILITY')
+        put(db, 'Case', case['id'], case)
+        audit(db, case['id'], 'referral', 'Legacy generated slot retired')
 
 def ingest(db, patient_id, observation):
     patient,_ = get(db,'Patient',patient_id)
@@ -81,13 +94,18 @@ def ingest(db, patient_id, observation):
     key = hashlib.sha256(f"{patient_id}:{oid}:{risk['risk_zone']}".encode()).hexdigest()
     duplicate = db.execute('SELECT case_id FROM idempotency WHERE key=?',(key,)).fetchone()
     if duplicate: return get(db,'Case',duplicate['case_id'])[0]
+    prior = next((row for row in all_of(db, 'Case') if row['id'] == patient_id), None)
+    preserve_visit = (
+        prior and prior.get('appointment_id') and risk['risk_zone'] == 'YELLOW'
+        and prior.get('required_specialty') == risk['required_specialty']
+    )
     for task in all_of(db, 'Call'):
         if task['case_id'] == patient_id and task['status'] in ('READY', 'QUEUED', 'NO_ANSWER', 'RESCHEDULE_REQUESTED'):
             task['status'] = 'SUPERSEDED'
             put(db, 'Call', task['id'], task)
-    if risk['risk_zone'] != 'YELLOW':
+    if not preserve_visit:
         for appointment in all_of(db, 'Appointment'):
-            if appointment['patient'] == patient_id and appointment['status'] in ('proposed', 'booked'):
+            if appointment['patient'] == patient_id and appointment['status'] in ('proposed', 'booked', 'untimed', 'reschedule_requested'):
                 _, version = get(db, 'Appointment', appointment['id'])
                 appointment['status'] = 'cancelled'
                 put(db, 'Appointment', appointment['id'], appointment, version + 1)
@@ -101,22 +119,25 @@ def ingest(db, patient_id, observation):
         doctor = candidates[0] if candidates else None
         if doctor:
             case['assigned_practitioner_id'] = doctor['id']
-            case['status'] = 'PENDING_DOCTOR_ACK' if risk['risk_zone']=='RED' else 'REVIEW_REQUIRED' if risk['risk_zone']=='REVIEW' else 'APPOINTMENT_BOOKED'
-            if risk['risk_zone']=='RED': case['escalation_deadline']=stamp(now()+timedelta(minutes=15))
-            elif risk['risk_zone']=='YELLOW':
-                aid = f'appointment-{patient_id}'
-                old = db.execute('SELECT version FROM resources WHERE kind=? AND id=?',('Appointment',aid)).fetchone()
-                version = old['version']+1 if old else 1
-                appointment={'id':aid,'patient':patient_id,'practitioner':doctor['id'],'start':next_slot(db,doctor['id']),'status':'proposed'}
-                put(db,'Appointment',aid,appointment,version)
-                case.update(appointment_id=aid,appointment_time=appointment['start'],appointment_etag=f'W/"{version}"')
+            case['status'] = {
+                'RED': 'PENDING_DOCTOR_ACK', 'REVIEW': 'REVIEW_REQUIRED', 'YELLOW': 'REFERRED',
+            }[risk['risk_zone']]
+            if risk['risk_zone'] == 'RED':
+                case['escalation_deadline'] = stamp(now() + timedelta(minutes=15))
+            elif risk['risk_zone'] == 'YELLOW':
+                case['referral_status'] = 'AWAITING_FACILITY'
+                if preserve_visit:
+                    for key in ('appointment_id', 'appointment_time', 'appointment_etag', 'referral_status', 'status'):
+                        if key in prior:
+                            case[key] = prior[key]
             sid = f'referral-{patient_id}'
             put(db,'ServiceRequest',sid,{'id':sid,'patient':patient_id,'practitioner':doctor['id'],'status':'active','specialty':specialty})
             case['service_request_id']=sid
         else: case['status']='UNASSIGNED_REVIEW'
     put(db,'Case',patient_id,case)
     db.execute('INSERT INTO idempotency VALUES(?,?)',(key,patient_id))
-    if risk['risk_zone'] in ('RED','YELLOW'): queue_call(db,case,oid)
+    if risk['risk_zone'] == 'RED' or (preserve_visit and case['status'] == 'VISIT_PROPOSED'):
+        queue_call(db, case, oid)
     return case
 
 def queue_call(db,case,observation_id='manual'):
@@ -128,7 +149,7 @@ def queue_call(db,case,observation_id='manual'):
     if case['risk_zone']!='RED' and (local.hour>=21 or (local.hour,local.minute)<(8,30)):
         due=local.replace(hour=8,minute=30,second=0,microsecond=0)
         if due<local: due+=timedelta(days=1)
-    call={'id':cid,'case_id':case['id'],'mode':'simulation','status':'QUEUED' if due>local else 'READY','scheduled_at':stamp(due), 'target_role':'RELATED_PERSON' if case['risk_zone']=='RED' else 'MOTHER_OF_NEWBORN' if case['cohort_type']=='NEONATAL' else 'PATIENT','attempts':0,'case_version':case['created_at']}
+    call={'id':cid,'case_id':case['id'],'mode':'simulation','status':'QUEUED' if due>local else 'READY','scheduled_at':stamp(due), 'target_role':'RELATED_PERSON' if case['risk_zone']=='RED' else 'MOTHER_OF_NEWBORN' if case['cohort_type']=='NEONATAL' else 'PATIENT','attempts':0,'case_version':case['created_at'],'appointment_id':case.get('appointment_id')}
     put(db,'Call',cid,call)
     return call
 
@@ -144,11 +165,24 @@ def escalate(db,case):
 def process_due(db):
     for case in all_of(db,'Case'):
         if case['status']=='PENDING_DOCTOR_ACK' and datetime.fromisoformat(case['escalation_deadline'])<=now(): escalate(db,case)
-        if case.get('appointment_time') and case['status'] not in ('NO_SHOW_ALERTED','ATTENDED') and datetime.fromisoformat(case['appointment_time'])+timedelta(hours=2)<now():
-            arrived=any(e.get('patient')==case['patient_id'] and e.get('appointment')==case.get('appointment_id') for e in all_of(db,'Encounter'))
-            case['status']='ATTENDED' if arrived else 'NO_SHOW_ALERTED'
-            case['nurse_notified']=not arrived
-            put(db,'Case',case['id'],case)
+        if not case.get('appointment_id') or case['status'] in ('NO_SHOW_ALERTED', 'ATTENDED'):
+            continue
+        visit, _ = get(db, 'Appointment', case['appointment_id'])
+        if visit.get('source') != 'facility' or visit['status'] not in ('booked', 'untimed'):
+            continue
+        arrived = any(
+            e.get('patient') == case['patient_id'] and e.get('appointment') == visit['id']
+            for e in all_of(db, 'Encounter')
+        )
+        overdue = (
+            visit['status'] == 'booked' and visit.get('start')
+            and datetime.fromisoformat(visit['start']) + timedelta(hours=2) <= now()
+        )
+        if arrived or overdue:
+            case['status'] = 'ATTENDED' if arrived else 'NO_SHOW_ALERTED'
+            case['follow_up_required'] = not arrived
+            put(db, 'Case', case['id'], case)
+            audit(db, case['id'], 'attendance', case['status'])
     for call in all_of(db,'Call'):
         if call['status']=='QUEUED' and datetime.fromisoformat(call['scheduled_at'])<=now():
             call['status']='READY';put(db,'Call',call['id'],call)
@@ -177,7 +211,7 @@ app.add_middleware(CORSMiddleware,allow_origins=CORS_ORIGINS,allow_methods=['*']
 
 @app.get('/api/registry')
 def registry():
-    with connect() as db: return {'mode':'mock','patients':all_of(db,'Patient'),'cases':all_of(db,'Case'),'doctors':all_of(db,'PractitionerRole'),'calls':all_of(db,'Call'),'appointments':all_of(db,'Appointment'),'audit':all_of(db,'AuditEvent')}
+    with connect() as db: return {'mode':'mock','patients':[{k: v for k, v in p.items() if k != 'telecom'} for p in all_of(db,'Patient')],'cases':all_of(db,'Case'),'doctors':all_of(db,'PractitionerRole'),'calls':all_of(db,'Call'),'appointments':all_of(db,'Appointment'),'audit':all_of(db,'AuditEvent')}
 
 @app.post('/api/simulate/{scenario}')
 def simulate(scenario:str):
@@ -201,17 +235,118 @@ def case_action(case_id:str,action:str):
             result=escalate(db,case)
             audit(db,case_id,'busy','Case handed over; notification transport is simulated')
             return result
-        if action=='call':
-            if case['risk_zone'] not in ('RED','YELLOW'): raise HTTPException(409,'Outreach requires an assessed red or yellow case')
-            result=queue_call(db,case)
-            audit(db,case_id,'call','Simulated outreach queued; no external call placed')
+        if action == 'call':
+            for task in all_of(db, 'Call'):
+                if (task['case_id'] == case_id and task.get('case_version') == case['created_at']
+                        and task.get('appointment_id') == case.get('appointment_id')
+                        and task['status'] in ('READY', 'QUEUED', 'NO_ANSWER')):
+                    return task
+            result = queue_call(db, case, str(uuid4()))
+            audit(db, case_id, 'call', 'Manual contact task created; no external call placed')
             return result
         if action!='accept': raise HTTPException(404,'Unknown action')
-        if case['status'] not in ('PENDING_DOCTOR_ACK','ESCALATED','APPOINTMENT_BOOKED','REVIEW_REQUIRED'): raise HTTPException(409,'Case cannot be accepted in current state')
+        if case['status'] not in ('PENDING_DOCTOR_ACK','ESCALATED','REVIEW_REQUIRED'): raise HTTPException(409,'Case cannot be accepted in current state')
         case.update(status='DOCTOR_ACCEPTED',accepted_at=stamp())
         put(db,'Case',case_id,case)
         audit(db,case_id,'accept','Case acknowledgment recorded')
         return case
+
+class FacilityResponse(BaseModel):
+    mode: Literal['timed', 'untimed']
+    facility: str = Field(min_length=1, max_length=160)
+    practitioner_id: str | None = None
+    start: datetime | None = None
+    confirmed: bool = False
+
+@app.post('/api/referrals/{case_id}/response')
+def record_facility_response(case_id: str, response: FacilityResponse):
+    facility = response.facility.strip()
+    if not facility:
+        raise HTTPException(422, 'Muassasa nomini kiriting')
+    start = response.start
+    if response.mode == 'timed':
+        if not start or start.utcoffset() is None:
+            raise HTTPException(422, 'Qabul va vaqt mintaqasini kiriting')
+        if not response.practitioner_id or start <= now():
+            raise HTTPException(422, 'Qabul shifokori va kelajakdagi vaqtni kiriting')
+    elif start or response.confirmed:
+        raise HTTPException(422, 'Vaqtsiz tashrif uchun sana yoki tasdiq kiritilmaydi')
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        case, _ = get(db, 'Case', case_id)
+        if case['risk_zone'] != 'YELLOW' or not case.get('service_request_id'):
+            raise HTTPException(409, 'Bu holat rejali yo‘llanma uchun ochiq emas')
+        if case.get('referral_status') not in ('AWAITING_FACILITY', 'RESCHEDULE_REQUESTED'):
+            raise HTTPException(409, 'Muassasa javobi allaqachon qayd etilgan')
+        if response.practitioner_id:
+            get(db, 'PractitionerRole', response.practitioner_id)
+        if case.get('appointment_id'):
+            old, version = get(db, 'Appointment', case['appointment_id'])
+            old['status'] = 'cancelled'
+            put(db, 'Appointment', old['id'], old, version + 1)
+        for task in all_of(db, 'Call'):
+            if task['case_id'] == case_id and task['status'] in ('READY', 'QUEUED', 'NO_ANSWER'):
+                task['status'] = 'SUPERSEDED'
+                put(db, 'Call', task['id'], task)
+        visit_id = str(uuid4())
+        visit = {
+            'id': visit_id, 'patient': case_id, 'practitioner': response.practitioner_id,
+            'facility': facility, 'mode': response.mode, 'source': 'facility',
+            'status': 'untimed' if response.mode == 'untimed' else 'booked' if response.confirmed else 'proposed',
+        }
+        if start:
+            visit['start'] = stamp(start)
+        put(db, 'Appointment', visit_id, visit)
+        case.pop('follow_up_required', None)
+        case.update(appointment_id=visit_id, appointment_time=visit.get('start'), appointment_etag='W/"1"',
+                    referral_status='FACILITY_RESPONDED',
+                    status={'untimed': 'VISIT_UNTIMED', 'booked': 'PATIENT_CONFIRMED', 'proposed': 'VISIT_PROPOSED'}[visit['status']])
+        put(db, 'Case', case_id, case)
+        if visit['status'] == 'proposed':
+            queue_call(db, case, visit_id)
+        audit(db, case_id, 'facility_response', visit['status'])
+        return visit
+
+@app.post('/api/visits/{visit_id}/attended')
+def record_attendance(visit_id: str):
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        visit, _ = get(db, 'Appointment', visit_id)
+        case, _ = get(db, 'Case', visit['patient'])
+        if case.get('appointment_id') != visit_id or visit['status'] not in ('booked', 'untimed', 'proposed'):
+            raise HTTPException(409, 'Joriy tashrifni tanlang')
+        if case['status'] == 'ATTENDED':
+            return case
+        encounter_id = f'attendance-{visit_id}'
+        put(db, 'Encounter', encounter_id, {
+            'id': encounter_id, 'patient': case['id'], 'appointment': visit_id,
+            'status': 'finished', 'recorded_at': stamp(),
+        })
+        case.update(status='ATTENDED', follow_up_required=False)
+        put(db, 'Case', case['id'], case)
+        audit(db, case['id'], 'attendance', 'ATTENDED')
+        return case
+
+def apply_appointment_outcome(db, case, outcome):
+    if case['risk_zone'] != 'YELLOW' or not case.get('appointment_id'):
+        raise HTTPException(409, 'Bu holatda rejali qabul mavjud emas')
+    visit, version = get(db, 'Appointment', case['appointment_id'])
+    if case['appointment_etag'] != f'W/"{version}"':
+        raise HTTPException(412, 'Qabul o‘zgargan. Joriy yozuvni tekshiring.')
+    if (visit.get('source') != 'facility' or not visit.get('start')
+            or visit['status'] not in ('proposed', 'booked') or case['status'] == 'ATTENDED'):
+        raise HTTPException(409, 'Joriy qabul uchun bu natijani qayd etib bo‘lmaydi')
+    if outcome == 'CONFIRMED':
+        if datetime.fromisoformat(visit['start']) <= now():
+            raise HTTPException(409, 'Qabul vaqti o‘tgan')
+        visit['status'] = 'booked'
+        case['status'] = 'PATIENT_CONFIRMED'
+    else:
+        visit['status'] = 'reschedule_requested'
+        case.update(status='REFERRED', referral_status='RESCHEDULE_REQUESTED', appointment_time=None)
+    put(db, 'Appointment', visit['id'], visit, version + 1)
+    case['appointment_etag'] = f'W/"{version + 1}"'
+    put(db, 'Case', case['id'], case)
 
 class OutreachOutcome(BaseModel):
     outcome: Literal['REACHED', 'CONFIRMED', 'RESCHEDULE_REQUESTED', 'NO_ANSWER']
@@ -227,21 +362,14 @@ def record_outreach(call_id: str, attempt: OutreachOutcome):
         key = f'outreach:{call_id}:{attempt.attempt_id}'
         if db.execute('SELECT 1 FROM idempotency WHERE key=?', (key,)).fetchone():
             return call
-        if call['status'] not in ('READY', 'QUEUED', 'NO_ANSWER', 'RESCHEDULE_REQUESTED'):
+        if call['status'] not in ('READY', 'QUEUED', 'NO_ANSWER'):
             raise HTTPException(409, 'Aloqa vazifasi yakunlangan')
         if call.get('case_version') and call['case_version'] != case['created_at']:
             raise HTTPException(409, 'Yangi kuzatuv kiritilgan. Joriy aloqa vazifasini oching.')
         if attempt.outcome in ('CONFIRMED', 'RESCHEDULE_REQUESTED'):
-            if case['risk_zone'] != 'YELLOW' or not case.get('appointment_id'):
-                raise HTTPException(409, 'Bu holatda rejali qabul mavjud emas')
-            appointment, version = get(db, 'Appointment', case['appointment_id'])
-            if appointment['status'] not in ('proposed', 'booked') or case['appointment_etag'] != f'W/"{version}"':
-                raise HTTPException(409, 'Qabul o‘zgargan. Joriy yozuvni tekshiring.')
-            if attempt.outcome == 'CONFIRMED':
-                appointment['status'] = 'booked'
-                put(db, 'Appointment', appointment['id'], appointment, version + 1)
-                case['appointment_etag'] = f'W/"{version + 1}"'
-                put(db, 'Case', case['id'], case)
+            if call.get('appointment_id') != case.get('appointment_id'):
+                raise HTTPException(409, 'Bu aloqa vazifasi joriy qabulga tegishli emas')
+            apply_appointment_outcome(db, case, attempt.outcome)
         call.update(status=attempt.outcome, attempts=call['attempts']+1, recorded_at=stamp(), mode='manual')
         put(db, 'Call', call_id, call)
         audit(db, case['id'], 'outreach', attempt.outcome)
@@ -257,17 +385,12 @@ class VoiceEvent(BaseModel):
 def voice_event(event:VoiceEvent):
     if event.intent not in ('CONFIRMED','RESCHEDULE_REQUESTED','NO_ANSWER'): raise HTTPException(422,'Unknown intent')
     with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
         case,_=get(db,'Case',event.case_id)
         key=f'voice:{event.event_id}'
         if db.execute('SELECT 1 FROM idempotency WHERE key=?',(key,)).fetchone(): return case
         if event.intent in ('CONFIRMED','RESCHEDULE_REQUESTED'):
-            if not case.get('appointment_id'): raise HTTPException(409,'Emergency cases cannot be converted into routine appointments')
-            appointment,version=get(db,'Appointment',case['appointment_id'])
-            if case['appointment_etag']!=f'W/"{version}"': raise HTTPException(412,'Appointment changed; refresh before applying voice response')
-            if event.intent=='RESCHEDULE_REQUESTED': appointment['start']=next_slot(db,appointment['practitioner'],datetime.fromisoformat(appointment['start'])+timedelta(minutes=30))
-            appointment['status']='booked'
-            put(db,'Appointment',appointment['id'],appointment,version+1)
-            case.update(status='PATIENT_CONFIRMED',appointment_time=appointment['start'],appointment_etag=f'W/"{version+1}"')
+            apply_appointment_outcome(db, case, event.intent)
         else:
             case['unanswered_attempts']=case.get('unanswered_attempts',0)+1
             if case['unanswered_attempts']>=2: case.update(nurse_notified=True,family_contact_queued=True)
@@ -298,6 +421,7 @@ def get_resource(kind:str,rid:str,response:Response):
 def create_resource(kind:str,payload:dict,response:Response):
     if kind not in {'Observation','ServiceRequest','Appointment','Encounter'}: raise HTTPException(405,'Unsupported create')
     with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
         if kind=='Observation':
             try: return ingest(db,payload['patient'].split('/')[-1],payload)
             except (KeyError,ValueError) as exc: raise HTTPException(422,str(exc))
@@ -311,6 +435,7 @@ def create_resource(kind:str,payload:dict,response:Response):
 @app.put('/dmed/v2/Appointment/{rid}')
 def update_appointment(rid:str,payload:dict,response:Response,if_match:str|None=Header(None)):
     with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
         old,version=get(db,'Appointment',rid)
         if if_match!=f'W/"{version}"': raise HTTPException(412,'If-Match must match the current ETag')
         updated={**old,**payload,'id':rid}

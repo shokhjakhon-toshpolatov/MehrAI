@@ -31,9 +31,13 @@ import {
   loadRegistry,
   performCaseAction,
   recordOutcome,
+  recordFacilityResponse,
+  recordAttendance,
+  type FacilityResponse,
   runScenario,
   type RegistryResult,
   type OutreachOutcome,
+  type Outreach,
 } from "@/lib/api";
 
 const formatDate = (value: string) =>
@@ -128,11 +132,32 @@ export default function Dashboard() {
     scoped.some((p) => p.id === c.patientId),
   );
   const tasks = calls.filter((c) =>
-    ["READY", "QUEUED", "NO_ANSWER", "RESCHEDULE_REQUESTED"].includes(c.status),
+    ["READY", "QUEUED", "NO_ANSWER"].includes(c.status),
   );
   const emergency = scoped.filter(
     (p) => p.zone === "RED" && p.statusCode !== "DOCTOR_ACCEPTED",
   );
+  const visits = (data?.appointments ?? [])
+    .filter((visit) => ["proposed", "booked", "untimed"].includes(visit.status))
+    .flatMap((visit) => {
+      const patient = scoped.find((p) => p.id === visit.patient);
+      return patient ? [{ visit, patient }] : [];
+    })
+    .sort((a, b) => (a.visit.start ?? "").localeCompare(b.visit.start ?? ""));
+  const selectedVisit = (data?.appointments ?? []).find(
+    (visit) =>
+      visit.patient === selected?.id &&
+      ["proposed", "booked", "untimed"].includes(visit.status),
+  );
+  const selectedTasks = (data?.calls ?? []).filter(
+    (call) => call.patientId === selected?.id,
+  );
+  const activeContact = selectedTasks.find(isOpenContact);
+  const saveContact = (
+    task: Outreach,
+    outcome: OutreachOutcome,
+    attemptId: string,
+  ) => save(() => recordOutcome(task.id, outcome, attemptId));
   const nextDeadline = emergency.find(isPending)?.deadline;
   const seconds =
     nextDeadline && clock
@@ -150,6 +175,8 @@ export default function Dashboard() {
           busy: "Holat o‘tkazildi",
           outreach: "Aloqa natijasi qayd etildi",
           call: "Aloqa vazifasi yaratildi",
+          facility_response: "Muassasa javobi qayd etildi",
+          attendance: "Tashrif holati qayd etildi",
         }[e.action] ?? "Holat yangilandi"),
       detail: "",
       time: formatDate(e.at),
@@ -198,7 +225,11 @@ export default function Dashboard() {
               label: "Perinatal registr",
               count: patients.length,
             },
-            { id: "appointments", icon: CalendarDays, label: "Qabullar" },
+            {
+              id: "appointments",
+              icon: CalendarDays,
+              label: "Yo‘llanmalar va qabullar",
+            },
             { id: "voice", icon: Phone, label: "Bemorlar bilan aloqa" },
             { id: "clinics", icon: Building2, label: "Poliklinikalar" },
             { id: "analytics", icon: Activity, label: "Tahlil va hisobotlar" },
@@ -293,7 +324,7 @@ export default function Dashboard() {
                   : (
                       {
                         registry: "Perinatal registr",
-                        appointments: "Qabullar jadvali",
+                        appointments: "Yo‘llanmalar va qabullar",
                         voice: "Bemorlar bilan aloqa",
                         clinics: "Poliklinikalar",
                         analytics: "Tahlil va hisobotlar",
@@ -590,56 +621,92 @@ export default function Dashboard() {
             </section>
           )}
           {tab === "appointments" && (
-            <section className="panel large-panel">
-              <div className="panel-heading">
-                <h2>Rejalashtirilgan ko‘riklar</h2>
-                <span>Toshkent vaqti</span>
-              </div>
-              {!data?.appointments.length && (
-                <p className="workflow-empty">
-                  {data
-                    ? "Qabul yozuvlari yo‘q."
-                    : "Qabul yozuvlarini ko‘rish uchun serverga ulaning."}
-                </p>
-              )}
-              {data?.appointments
-                .filter((a) => a.status !== "cancelled")
-                .sort((a, b) => Date.parse(a.start) - Date.parse(b.start))
-                .map((a) => {
-                  const p = scoped.find((patient) => patient.id === a.patient);
-                  if (!p) return null;
-                  return (
-                    <button
-                      className="appointment-row"
-                      key={a.id}
-                      onClick={() => setSelected(p)}
+            <div className="left-column">
+              <section className="panel">
+                <div className="panel-heading">
+                  <div>
+                    <h2>Muassasa javobi kutilayotgan yo‘llanmalar</h2>
+                    <p>Qabul vaqtini muassasa bildirganidan keyin kiriting.</p>
+                  </div>
+                </div>
+                {!scoped.some(isAwaitingFacility) && (
+                  <p className="workflow-empty">
+                    Javob kutilayotgan yo‘llanma yo‘q.
+                  </p>
+                )}
+                {scoped.filter(isAwaitingFacility).map((p) => (
+                  <button
+                    className="appointment-row"
+                    key={p.id}
+                    onClick={() => setSelected(p)}
+                  >
+                    <span className="appointment-icon">
+                      <Stethoscope size={20} />
+                    </span>
+                    <div>
+                      <strong>{p.name}</strong>
+                      <p>
+                        Mas’ul shifokor:{" "}
+                        {doctorNames[p.doctor] || "Biriktirilmagan"} ·{" "}
+                        {p.clinic}
+                      </p>
+                    </div>
+                    <span className="badge amber">
+                      {p.referralStatus === "RESCHEDULE_REQUESTED"
+                        ? "Yangi vaqt kutilmoqda"
+                        : "Javob kutilmoqda"}
+                    </span>
+                    <ChevronRight size={18} />
+                  </button>
+                ))}
+              </section>
+              <section className="panel">
+                <div className="panel-heading">
+                  <h2>Muassasa bilan kelishilgan tashriflar</h2>
+                  <span>Toshkent vaqti</span>
+                </div>
+                {!visits.length && (
+                  <p className="workflow-empty">Kelishilgan tashriflar yo‘q.</p>
+                )}
+                {visits.map(({ visit: a, patient: p }) => (
+                  <button
+                    className="appointment-row"
+                    key={a.id}
+                    onClick={() => setSelected(p)}
+                  >
+                    <span className="appointment-icon">
+                      <CalendarDays size={22} />
+                    </span>
+                    <div>
+                      <strong>{p.name}</strong>
+                      <p>
+                        {a.practitioner
+                          ? (doctorNames[a.practitioner] ?? a.practitioner)
+                          : "Qabul shifokori ko‘rsatilmagan"}{" "}
+                        · {a.facility ?? "Muassasa ko‘rsatilmagan"}
+                      </p>
+                    </div>
+                    <span>
+                      {a.start ? formatDate(a.start) : "Aniq vaqtsiz"}
+                    </span>
+                    <span
+                      className={`badge ${p.statusCode === "NO_SHOW_ALERTED" ? "red" : p.statusCode === "ATTENDED" || a.status === "booked" ? "green" : "amber"}`}
                     >
-                      <span className="appointment-icon">
-                        <CalendarDays size={22} />
-                      </span>
-                      <div>
-                        <strong>{p.name}</strong>
-                        <p>
-                          {doctorNames[p.doctor]} · {p.clinic}
-                        </p>
-                      </div>
-                      <span>{formatDate(a.start)}</span>
-                      <span
-                        className={`badge ${a.status === "booked" ? "green" : "amber"}`}
-                      >
-                        {p.statusCode === "ATTENDED"
-                          ? "Keldi"
-                          : p.statusCode === "NO_SHOW_ALERTED"
-                            ? "Kelmadi"
-                            : a.status === "booked"
-                              ? "Tasdiqlangan"
-                              : "Taklif qilingan"}
-                      </span>
-                      <ChevronRight size={18} />
-                    </button>
-                  );
-                })}
-            </section>
+                      {p.statusCode === "ATTENDED"
+                        ? "Keldi"
+                        : p.statusCode === "NO_SHOW_ALERTED"
+                          ? "Kelmadi"
+                          : a.status === "booked"
+                            ? "Tasdiqlangan"
+                            : a.status === "untimed"
+                              ? "Kelishilgan"
+                              : "Tasdiq kutilmoqda"}
+                    </span>
+                    <ChevronRight size={18} />
+                  </button>
+                ))}
+              </section>
+            </div>
           )}
           {tab === "voice" && (
             <section className="panel large-panel">
@@ -658,17 +725,6 @@ export default function Dashboard() {
               )}
               {calls.map((c) => {
                 const patient = patients.find((p) => p.id === c.patientId);
-                const outcomes: { id: OutreachOutcome; label: string }[] =
-                  patient?.zone === "YELLOW" && patient.appointmentAt
-                    ? [
-                        { id: "CONFIRMED", label: "Qabul tasdiqlandi" },
-                        {
-                          id: "RESCHEDULE_REQUESTED",
-                          label: "Boshqa vaqt so‘raldi",
-                        },
-                      ]
-                    : [{ id: "REACHED", label: "Bog‘lanildi" }];
-                outcomes.push({ id: "NO_ANSWER", label: "Javob yo‘q" });
                 return (
                   <article className="outreach-row" key={c.id}>
                     <div>
@@ -684,44 +740,19 @@ export default function Dashboard() {
                       </p>
                     </div>
                     <strong>{c.statusLabel}</strong>
-                    {tasks.includes(c) && (
-                      <form
-                        onSubmit={(e) => {
-                          e.preventDefault();
-                          const outcome = new FormData(e.currentTarget).get(
-                            "outcome",
-                          ) as OutreachOutcome;
-                          void save(() =>
-                            recordOutcome(
-                              c.id,
-                              outcome,
-                              globalThis.crypto.randomUUID(),
-                            ),
-                          );
-                        }}
-                      >
-                        <select
-                          name="outcome"
-                          aria-label={`${c.patientName}: aloqa natijasi`}
-                          required
-                          defaultValue=""
-                        >
-                          <option value="" disabled>
-                            Natijani tanlang
-                          </option>
-                          {outcomes.map((o) => (
-                            <option value={o.id} key={o.id}>
-                              {o.label}
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          className="button"
-                          disabled={offline || working}
-                        >
-                          Qayd etish
-                        </button>
-                      </form>
+                    {isOpenContact(c) && (
+                      <ContactOutcomeForm
+                        key={c.id}
+                        task={c}
+                        timed={Boolean(
+                          c.appointmentId &&
+                          scheduledVisit(data?.appointments, c.appointmentId)
+                            ?.start &&
+                          patient?.statusCode !== "ATTENDED",
+                        )}
+                        disabled={offline || working}
+                        onSave={saveContact}
+                      />
                     )}
                   </article>
                 );
@@ -938,7 +969,6 @@ export default function Dashboard() {
                     "PENDING_DOCTOR_ACK",
                     "ESCALATED",
                     "REVIEW_REQUIRED",
-                    "APPOINTMENT_BOOKED",
                   ].includes(selected.statusCode ?? "") && (
                     <div className="button-row">
                       <button
@@ -959,6 +989,92 @@ export default function Dashboard() {
                           }
                         >
                           Bandman — o‘tkazish
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  <div className="detail-block patient-contact">
+                    <h3>
+                      <Phone size={16} /> Bemor bilan bog‘lanish
+                    </h3>
+                    <p>
+                      Aloqa oluvchi:{" "}
+                      {selected.zone === "RED"
+                        ? "Oila a’zosi"
+                        : selected.cohort === "NEONATAL"
+                          ? "Chaqaloqning onasi"
+                          : "Bemor"}
+                    </p>
+                    <p>Namuna yozuvi · telefon raqami mavjud emas</p>
+                    {selectedTasks.length > 0 && (
+                      <p>So‘nggi natija: {selectedTasks.at(-1)?.statusLabel}</p>
+                    )}
+                    {activeContact ? (
+                      <ContactOutcomeForm
+                        key={activeContact.id}
+                        task={activeContact}
+                        timed={Boolean(
+                          activeContact.appointmentId &&
+                          selectedVisit?.id === activeContact.appointmentId &&
+                          selectedVisit.start &&
+                          selected.statusCode !== "ATTENDED",
+                        )}
+                        disabled={offline || working}
+                        onSave={saveContact}
+                      />
+                    ) : (
+                      <button
+                        className="button"
+                        type="button"
+                        disabled={offline || working}
+                        onClick={() =>
+                          save(() => performCaseAction(selected.id, "call"))
+                        }
+                      >
+                        Aloqa vazifasini ochish
+                      </button>
+                    )}
+                  </div>
+                  {isAwaitingFacility(selected) && (
+                    <FacilityResponseForm
+                      key={selected.id}
+                      disabled={offline || working}
+                      rescheduling={
+                        selected.referralStatus === "RESCHEDULE_REQUESTED"
+                      }
+                      onSave={(response) =>
+                        save(() =>
+                          recordFacilityResponse(selected.id, response),
+                        )
+                      }
+                    />
+                  )}
+                  {selectedVisit && (
+                    <div className="detail-block">
+                      <h3>Muassasa bilan kelishilgan tashrif</h3>
+                      <p>
+                        {selectedVisit.facility ?? "Muassasa ko‘rsatilmagan"}
+                      </p>
+                      <p>
+                        {selectedVisit.practitioner
+                          ? (doctorNames[selectedVisit.practitioner] ??
+                            selectedVisit.practitioner)
+                          : "Qabul shifokori ko‘rsatilmagan"}
+                      </p>
+                      <p>
+                        {selectedVisit.start
+                          ? formatDate(selectedVisit.start)
+                          : "Aniq vaqtsiz tashrif"}
+                      </p>
+                      {selected.statusCode !== "ATTENDED" && (
+                        <button
+                          className="button"
+                          disabled={offline || working}
+                          onClick={() =>
+                            save(() => recordAttendance(selectedVisit.id))
+                          }
+                        >
+                          Bemor kelganini qayd etish
                         </button>
                       )}
                     </div>
@@ -998,6 +1114,171 @@ export default function Dashboard() {
     </div>
   );
 }
+function scheduledVisit(
+  visits: RegistryResult["appointments"] | undefined,
+  id: string,
+) {
+  return visits?.find(
+    (visit) => visit.id === id && ["proposed", "booked"].includes(visit.status),
+  );
+}
+
+function isOpenContact(task: Outreach) {
+  return ["READY", "QUEUED", "NO_ANSWER"].includes(task.status);
+}
+
+function ContactOutcomeForm({
+  task,
+  timed,
+  disabled,
+  onSave,
+}: {
+  task: Outreach;
+  timed: boolean;
+  disabled: boolean;
+  onSave: (task: Outreach, outcome: OutreachOutcome, attemptId: string) => void;
+}) {
+  const attempt = useRef<{
+    count: number;
+    outcome: OutreachOutcome;
+    id: string;
+  } | null>(null);
+  return (
+    <form
+      className="contact-outcome"
+      onSubmit={(e) => {
+        e.preventDefault();
+        const outcome = new FormData(e.currentTarget).get(
+          "outcome",
+        ) as OutreachOutcome;
+        if (
+          attempt.current?.count !== task.attempts ||
+          attempt.current.outcome !== outcome
+        ) {
+          attempt.current = {
+            count: task.attempts,
+            outcome,
+            id: globalThis.crypto.randomUUID(),
+          };
+        }
+        onSave(task, outcome, attempt.current.id);
+      }}
+    >
+      <select
+        name="outcome"
+        aria-label={`${task.patientName}: aloqa natijasi`}
+        required
+        defaultValue=""
+        disabled={disabled}
+      >
+        <option value="" disabled>
+          Natijani tanlang
+        </option>
+        <option value="REACHED">Bog‘lanildi</option>
+        {timed && (
+          <>
+            <option value="CONFIRMED">Qabul tasdiqlandi</option>
+            <option value="RESCHEDULE_REQUESTED">Boshqa vaqt so‘raldi</option>
+          </>
+        )}
+        <option value="NO_ANSWER">Javob yo‘q</option>
+      </select>
+      <button className="button" disabled={disabled}>
+        Qayd etish
+      </button>
+    </form>
+  );
+}
+
+function isAwaitingFacility(patient: Patient) {
+  return (
+    patient.referralStatus === "AWAITING_FACILITY" ||
+    patient.referralStatus === "RESCHEDULE_REQUESTED"
+  );
+}
+
+function FacilityResponseForm({
+  disabled,
+  rescheduling,
+  onSave,
+}: {
+  disabled: boolean;
+  rescheduling: boolean;
+  onSave: (response: FacilityResponse) => void;
+}) {
+  const [mode, setMode] = useState<FacilityResponse["mode"]>("timed");
+  return (
+    <form
+      className="detail-block facility-response"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const form = new FormData(event.currentTarget);
+        const practitioner = String(form.get("practitioner") ?? "");
+        onSave({
+          mode,
+          facility: String(form.get("facility") ?? "").trim(),
+          practitioner_id: practitioner || undefined,
+          start: mode === "timed" ? `${form.get("start")}+05:00` : undefined,
+          confirmed: mode === "timed" && form.get("confirmed") === "on",
+        });
+      }}
+    >
+      <h3>
+        {rescheduling
+          ? "Yangi qabul vaqtini qayd etish"
+          : "Muassasa javobini qayd etish"}
+      </h3>
+      <fieldset disabled={disabled}>
+        <label>
+          Tashrif turi
+          <select
+            value={mode}
+            onChange={(e) =>
+              setMode(e.target.value as FacilityResponse["mode"])
+            }
+          >
+            <option value="timed">Sana va vaqt belgilangan</option>
+            <option value="untimed">Aniq vaqtsiz tashrif</option>
+          </select>
+        </label>
+        <label>
+          Qabul qiluvchi muassasa
+          <input name="facility" required maxLength={160} />
+        </label>
+        <label>
+          Qabul shifokori
+          <select
+            name="practitioner"
+            required={mode === "timed"}
+            defaultValue=""
+          >
+            <option value="">Shifokorni tanlang</option>
+            {Object.values(doctorNames).map((name, index) => (
+              <option key={name} value={`d${index + 1}`}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </label>
+        {mode === "timed" && (
+          <>
+            <label>
+              Qabul vaqti (Toshkent)
+              <input name="start" type="datetime-local" required />
+            </label>
+            <label className="facility-confirm">
+              <input name="confirmed" type="checkbox" /> Bemor vaqtni tasdiqladi
+            </label>
+          </>
+        )}
+        <button type="submit" className="button primary">
+          Javobni saqlash
+        </button>
+      </fieldset>
+    </form>
+  );
+}
+
 function ClinicRows({ patients }: { patients: Patient[] }) {
   return (
     <div className="clinic-rows">

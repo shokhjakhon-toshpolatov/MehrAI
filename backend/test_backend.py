@@ -14,34 +14,64 @@ class BackendTests(unittest.TestCase):
     def tearDown(self):
         self.client.__exit__(None,None,None)
         self.tmp.cleanup()
-    def test_manual_outreach_result_controls_the_existing_appointment(self):
+    def facility_visit(self, case_id='p2', *, confirmed=False, mode='timed'):
+        from datetime import timedelta
+        payload = {'mode': mode, 'facility': 'Namuna poliklinikasi', 'practitioner_id': 'd1', 'confirmed': confirmed}
+        if mode == 'timed':
+            payload['start'] = main.stamp(main.now() + timedelta(days=1))
+        response = self.client.post(f'/api/referrals/{case_id}/response', json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()
+
+    def test_manual_outreach_keeps_rescheduling_in_the_referral_queue(self):
+        original = self.facility_visit()
         data = self.client.get('/api/registry').json()
         call = next(c for c in data['calls'] if c['case_id'] == 'p2')
         path = f"/api/outreach/{call['id']}/outcome"
-        original = next(a for a in data['appointments'] if a['patient'] == 'p2')
         request = {'outcome': 'RESCHEDULE_REQUESTED', 'attempt_id': 'a1'}
-        self.assertEqual(self.client.post(path, json=request).json()['status'], 'RESCHEDULE_REQUESTED')
-        self.assertEqual(self.client.get('/dmed/v2/Appointment/appointment-p2').json(), original)
-        request = {'outcome': 'CONFIRMED', 'attempt_id': 'a2'}
-        self.assertEqual(self.client.post(path, json=request).json()['attempts'], 2)
-        self.assertEqual(self.client.post(path, json=request).json()['attempts'], 2)
-        updated = self.client.get('/dmed/v2/Appointment/appointment-p2').json()
-        self.assertEqual(updated['status'], 'booked')
+        self.assertEqual(self.client.post(path, json=request).json()['attempts'], 1)
+        self.assertEqual(self.client.post(path, json=request).json()['attempts'], 1)
+        updated = self.client.get(f"/dmed/v2/Appointment/{original['id']}").json()
+        self.assertEqual(updated['status'], 'reschedule_requested')
         self.assertEqual(updated['start'], original['start'])
+        replacement = self.facility_visit(confirmed=True)
+        self.assertNotEqual(replacement['id'], original['id'])
+        self.assertEqual(replacement['practitioner'], 'd1')
+        registry = self.client.get('/api/registry').json()
+        self.assertEqual(next(c for c in registry['cases'] if c['id'] == 'p2')['assigned_practitioner_id'], 'd3')
 
     def test_new_emergency_supersedes_old_outreach_and_appointment(self):
+        visit = self.facility_visit('p4')
         call = next(c for c in self.client.get('/api/registry').json()['calls'] if c['case_id'] == 'p4')
         self.client.post('/api/simulate/neonatal-red')
         response = self.client.post(f"/api/outreach/{call['id']}/outcome", json={'outcome':'CONFIRMED','attempt_id':'stale'})
         self.assertEqual(response.status_code, 409)
-        data = self.client.get('/api/registry').json()
-        self.assertEqual(next(a for a in data['appointments'] if a['patient'] == 'p4')['status'], 'cancelled')
+        self.assertEqual(self.client.get(f"/dmed/v2/Appointment/{visit['id']}").json()['status'], 'cancelled')
+
+    def test_untimed_visit_has_no_slot_and_can_record_attendance(self):
+        visit = self.facility_visit('p4', mode='untimed')
+        self.assertNotIn('start', visit)
+        with main.connect() as db:
+            main.process_due(db)
+            self.assertEqual(main.get(db, 'Case', 'p4')[0]['status'], 'VISIT_UNTIMED')
+        self.assertEqual(self.client.post(f"/api/visits/{visit['id']}/attended").json()['status'], 'ATTENDED')
+
+    def test_contact_can_be_logged_without_exposing_phone_fields(self):
+        first = self.client.post('/api/cases/p1/call').json()
+        self.assertEqual(first['target_role'], 'PATIENT')
+        self.assertEqual(first['id'], self.client.post('/api/cases/p1/call').json()['id'])
+        result = self.client.post(f"/api/outreach/{first['id']}/outcome", json={'outcome':'REACHED','attempt_id':'first'})
+        self.assertEqual(result.json()['status'], 'REACHED')
+        self.assertTrue(all('telecom' not in p for p in self.client.get('/api/registry').json()['patients']))
+        self.assertNotEqual(first['id'], self.client.post('/api/cases/p1/call').json()['id'])
 
     def test_seed_and_routing(self):
         data=self.client.get('/api/registry').json()
         cases={c['id']:c for c in data['cases']}
         self.assertEqual([cases[f'p{i}']['risk_zone'] for i in range(1,5)],['GREEN','YELLOW','RED','YELLOW'])
         self.assertEqual(cases['p2']['assigned_practitioner_id'],'d3')
+        self.assertEqual(cases['p2']['referral_status'],'AWAITING_FACILITY')
+        self.assertEqual(data['appointments'],[])
         self.assertEqual(cases['p4']['assigned_practitioner_id'],'d4')
     def test_red_escalates_but_accepted_does_not(self):
         self.client.post('/api/simulate/fast-forward')
@@ -55,7 +85,7 @@ class BackendTests(unittest.TestCase):
         self.assertTrue(c['department_head_notified'])
         self.assertEqual(c['assigned_practitioner_id'],'d4')
     def test_optimistic_lock(self):
-        url='/dmed/v2/Appointment/appointment-p2'
+        url='/dmed/v2/Appointment/' + self.facility_visit()['id']
         r=self.client.get(url)
         self.assertEqual(self.client.put(url,json={'status':'booked'}).status_code,412)
         self.assertEqual(self.client.put(url,json={'status':'booked'},headers={'If-Match':r.headers['etag']}).status_code,200)
@@ -76,12 +106,15 @@ class BackendTests(unittest.TestCase):
         event['event_id']='second'
         self.assertTrue(self.client.post('/webhooks/voicelab/status',json=event).json()['nurse_notified'])
     def test_voice_confirm_and_reschedule(self):
+        visit = self.facility_visit()
         event={'case_id':'p2','intent':'CONFIRMED','event_id':'confirm'}
         r=self.client.post('/webhooks/voicelab/status',json=event).json()
         self.assertEqual(r['status'],'PATIENT_CONFIRMED')
         event.update(intent='RESCHEDULE_REQUESTED',event_id='reschedule')
         new=self.client.post('/webhooks/voicelab/status',json=event).json()
-        self.assertGreater(new['appointment_time'],r['appointment_time'])
+        self.assertIsNone(new['appointment_time'])
+        self.assertEqual(new['referral_status'], 'RESCHEDULE_REQUESTED')
+        self.assertEqual(self.client.get(f"/dmed/v2/Appointment/{visit['id']}").json()['start'], r['appointment_time'])
     def test_quiet_hours(self):
         from datetime import datetime,timezone
         from unittest.mock import patch
@@ -119,23 +152,25 @@ class BackendTests(unittest.TestCase):
             r=self.client.post('/webhooks/voicelab/status',json={'case_id':'p3','intent':intent,'event_id':intent})
             self.assertEqual(r.status_code,409)
     def test_stale_voice_booking_rejected(self):
-        url='/dmed/v2/Appointment/appointment-p2'
+        url='/dmed/v2/Appointment/' + self.facility_visit()['id']
         etag=self.client.get(url).headers['etag']
         self.client.put(url,json={'status':'cancelled'},headers={'If-Match':etag})
         r=self.client.post('/webhooks/voicelab/status',json={'case_id':'p2','intent':'CONFIRMED','event_id':'stale'})
         self.assertEqual(r.status_code,412)
-    def test_due_worker_appointment_specific_arrival(self):
+    def test_worker_counts_only_confirmed_timed_visits_as_no_show(self):
         from datetime import timedelta
+        confirmed = self.facility_visit('p2', confirmed=True)
+        proposed = self.facility_visit('p4')
         with main.connect() as db:
-            for pid in ('p2','p4'):
-                case,_=main.get(db,'Case',pid)
-                case['appointment_time']=main.stamp(main.now()-timedelta(hours=3))
-                main.put(db,'Case',pid,case)
-            main.put(db,'Encounter','correct',{'patient':'p2','appointment':'appointment-p2'})
-            main.put(db,'Encounter','other-visit',{'patient':'p4','appointment':'unrelated'})
+            for visit in (confirmed, proposed):
+                visit['start'] = main.stamp(main.now() - timedelta(hours=3))
+                main.put(db, 'Appointment', visit['id'], visit)
+            main.put(db, 'Encounter', 'other-visit', {'patient':'p2', 'appointment':'unrelated'})
             main.process_due(db)
-            self.assertEqual(main.get(db,'Case','p2')[0]['status'],'ATTENDED')
-            self.assertEqual(main.get(db,'Case','p4')[0]['status'],'NO_SHOW_ALERTED')
+            self.assertEqual(main.get(db, 'Case', 'p2')[0]['status'], 'NO_SHOW_ALERTED')
+            self.assertEqual(main.get(db, 'Case', 'p4')[0]['status'], 'VISIT_PROPOSED')
+        self.assertEqual(self.client.post(f"/api/visits/{confirmed['id']}/attended").json()['status'], 'ATTENDED')
+
     def test_due_worker_escalation_and_queue_release(self):
         from datetime import timedelta
         with main.connect() as db:
@@ -165,7 +200,7 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(call['attempts'],0)
         self.assertEqual(call['mode'],'simulation')
     def test_rejected_actions_do_not_create_audit(self):
-        self.assertEqual(self.client.post('/api/cases/p1/call').status_code,409)
+        self.assertEqual(self.client.post('/api/cases/p1/accept').status_code,409)
         self.assertEqual(self.client.post('/api/cases/p2/busy').status_code,409)
         self.assertEqual(self.client.post('/api/cases/p1/accept').status_code,409)
         self.assertEqual(self.client.get('/api/registry').json()['audit'],[])

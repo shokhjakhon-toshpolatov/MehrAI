@@ -28,10 +28,14 @@ The persisted worker checks emergency acknowledgment deadlines, quiet-hours call
 
 ## Deliberate integration limits
 
-Resource envelopes and simplified observations are demo contracts, not verified SSV/FHIR profiles. Sandbox OAuth, authenticated webhooks, real VoiceLab/Telegram transport, production authorization, multi-organization tenancy, secure clinical storage, and clinical validation require a separate integration stage. The four seed doctors have a simple deterministic local roster and weekday-independent 09:00–17:00 half-hour booking window, not a real availability feed. Multi-pathology records show all reasons but assign one primary specialty; missing observations enter `REVIEW` rather than being declared healthy. Neonatal thresholds mirror the brief and do not substitute for age/gestation-specific clinical guidance.
+Resource envelopes and simplified observations are demo contracts, not verified SSV/FHIR profiles. Sandbox OAuth, authenticated webhooks, real VoiceLab/Telegram transport, production authorization, multi-organization tenancy, secure clinical storage, and clinical validation require a separate integration stage. The four seed doctors have a deterministic sample roster. Facilities supply visit details manually. Multi-pathology records show all reasons but assign one primary specialty; missing observations enter `REVIEW` rather than being declared healthy. Neonatal thresholds mirror the brief and do not substitute for age/gestation-specific clinical guidance.
 
 ## Connected MehrAI interface
 
 Run `npm run build` before starting Uvicorn. The backend serves the built UI from `out/` at the same origin. DMed is disconnected. The workspace uses local sample records.
 
 `POST /api/outreach/{call_id}/outcome` accepts `{"outcome":"CONFIRMED","attempt_id":"unique-id"}`. Staff can record a confirmation, a request for a different time, a successful urgent contact, or no answer. Duplicate attempt IDs are ignored. A confirmation books the existing proposed slot, while a request for another time stays open. The endpoint records an outcome only and does not dial a phone.
+
+Yellow cases enter the referral queue without a visit time. Staff record the facility, receiving clinician, and either a proposed or confirmed fixed time, or an untimed visit, through `POST /api/referrals/{case_id}/response`. `POST /api/visits/{visit_id}/attended` records attendance. The worker checks only confirmed timed visits for no-shows. A request for another time returns the case to the referral queue. Previous automatically generated sample slots are retired at startup.
+
+The sample registry omits phone fields, and startup clears legacy sample phone values. Contact actions create tasks and record staff-reported results without dialing.

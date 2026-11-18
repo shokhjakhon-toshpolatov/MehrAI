@@ -9,6 +9,7 @@ export type Outreach = {
   statusLabel?: string;
   simulated?: boolean;
   scheduledAt: string;
+  appointmentId?: string;
   attempts: number;
 };
 export type AuditEvent = {
@@ -23,8 +24,10 @@ export type AuditEvent = {
 export type Appointment = {
   id: string;
   patient: string;
-  start: string;
+  start?: string;
   status: string;
+  practitioner?: string;
+  facility?: string;
 };
 export type OutreachOutcome =
   "REACHED" | "CONFIRMED" | "RESCHEDULE_REQUESTED" | "NO_ANSWER";
@@ -57,7 +60,8 @@ type ApiCase = {
   escalation_deadline?: string;
   updated_at?: string;
   created_at?: string;
-  appointment_time?: string;
+  appointment_time?: string | null;
+  referral_status?: string;
 };
 type ApiCall = {
   id: string;
@@ -66,6 +70,7 @@ type ApiCall = {
   mode: string;
   status: string;
   scheduled_at: string;
+  appointment_id?: string;
   attempts: number;
 };
 type ApiRegistry = {
@@ -88,7 +93,9 @@ const statuses: Record<string, string> = {
   PENDING_DOCTOR_ACK: "Shifokor tasdig‘i kutilmoqda",
   ESCALATED: "Eskalatsiya qilindi",
   DOCTOR_ACCEPTED: "Shifokor qabul qildi",
-  APPOINTMENT_BOOKED: "Qabul taklif qilindi",
+  REFERRED: "Yo‘llanma berildi",
+  VISIT_PROPOSED: "Qabul vaqti taklif qilindi",
+  VISIT_UNTIMED: "Vaqtsiz tashrif kelishildi",
   PATIENT_CONFIRMED: "Bemor qabulni tasdiqladi",
   REVIEW_REQUIRED: "Ma’lumotlarni ko‘rib chiqish zarur",
   UNASSIGNED_REVIEW: "Mutaxassis biriktirilmagan",
@@ -239,8 +246,9 @@ export async function loadRegistry(): Promise<RegistryResult> {
       statusCode: c.status,
       deadline: c.escalation_deadline,
       updatedAt: c.updated_at ?? c.created_at,
-      appointmentAt: c.appointment_time,
-      time: displayDate(c.appointment_time),
+      appointmentAt: c.appointment_time ?? undefined,
+      referralStatus: c.referral_status,
+      time: displayDate(c.appointment_time ?? undefined),
     };
   });
   const names = new Map(
@@ -258,12 +266,18 @@ export async function loadRegistry(): Promise<RegistryResult> {
     statusLabel: `${callStatuses[c.status] ?? c.status}`,
     simulated: c.mode === "simulation",
     scheduledAt: c.scheduled_at,
+    appointmentId: c.appointment_id,
     attempts: c.attempts,
   }));
   return {
     patients,
     calls,
-    appointments: data.appointments ?? [],
+    appointments: (data.appointments ?? []).map((visit) => ({
+      ...visit,
+      practitioner: visit.practitioner
+        ? (doctorIds[visit.practitioner] ?? visit.practitioner)
+        : undefined,
+    })),
     source: data.mode,
     audit: data.audit ?? [],
   };
@@ -290,4 +304,25 @@ export function runScenario(
   scenario: "maternal-red" | "neonatal-red" | "fast-forward",
 ) {
   return request(`/api/simulate/${scenario}`, "POST");
+}
+
+export type FacilityResponse = {
+  mode: "timed" | "untimed";
+  facility: string;
+  practitioner_id?: string;
+  start?: string;
+  confirmed: boolean;
+};
+export function recordFacilityResponse(
+  caseId: string,
+  response: FacilityResponse,
+) {
+  return request(
+    `/api/referrals/${encodeURIComponent(caseId)}/response`,
+    "POST",
+    response,
+  );
+}
+export function recordAttendance(visitId: string) {
+  return request(`/api/visits/${encodeURIComponent(visitId)}/attended`, "POST");
 }
