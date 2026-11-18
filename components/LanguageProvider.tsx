@@ -18,7 +18,10 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
       if (localStorage.getItem(STORAGE_KEY) === "ru") updateLanguage("ru");
     } catch { /* Language switching also works when storage is unavailable. */ }
   }, []);
-  useEffect(() => { document.documentElement.lang = language; }, [language]);
+  useEffect(() => {
+    document.documentElement.lang = language;
+    document.title = language === "ru" ? "MehrAI — Перинатальный регистр" : "MehrAI — Perinatal registr";
+  }, [language]);
   const setLanguage = useCallback((value: Language) => {
     updateLanguage(value);
     try { localStorage.setItem(STORAGE_KEY, value); } catch { /* Keep the in-memory preference. */ }

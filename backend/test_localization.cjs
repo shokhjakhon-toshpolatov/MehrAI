@@ -52,10 +52,31 @@ test('dates use the chosen locale and retain the Tashkent time zone', () => {
 });
 
 // Render actual components with each locale, without a browser or a running API.
-function localizedModule(file, language) {
+function localizedModule(file, language, initialState = {}) {
   const filename = path.join(__dirname, '..', file);
   const module = { exports: {} };
-  const compiled = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
+  let source = fs.readFileSync(filename, 'utf8');
+  // Supply realistic screen states while rendering the actual components.
+  const syntax = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const edits = [];
+  function visit(node) {
+    if (ts.isVariableDeclaration(node) && ts.isArrayBindingPattern(node.name)
+      && node.initializer && ts.isCallExpression(node.initializer)
+      && node.initializer.expression.getText(syntax) === 'useState') {
+      const name = node.name.elements[0].getText(syntax);
+      const argument = node.initializer.arguments[0];
+      if (argument && Object.hasOwn(initialState, name)) {
+        edits.push({ start: argument.getStart(syntax), end: argument.end, text: `__initialState[${JSON.stringify(name)}]` });
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(syntax);
+  for (const edit of edits.sort((a, b) => b.start - a.start)) {
+    source = source.slice(0, edit.start) + edit.text + source.slice(edit.end);
+  }
+  if (file === 'app/page.tsx') source += '\nexport const __screens = { ObservationFeed, CaseRationale, BookingDialog, UrgentBookingDialog, FacilityResponseForm };';
+  const compiled = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
   }).outputText;
   const locale = {
@@ -65,11 +86,11 @@ function localizedModule(file, language) {
   };
   const localRequire = name => {
     if (name.includes('LanguageProvider')) return { useLanguage: () => locale };
-    if (name.startsWith('@/')) return localizedModule(name.slice(2) + (name.includes('Registry') ? '.tsx' : '.ts'), language);
-    if (name.startsWith('.')) return localizedModule(path.relative(path.join(__dirname, '..'), path.resolve(path.dirname(filename), name)) + '.ts', language);
+    if (name.startsWith('@/')) return localizedModule(name.slice(2) + (name.includes('Registry') ? '.tsx' : '.ts'), language, initialState);
+    if (name.startsWith('.')) return localizedModule(path.relative(path.join(__dirname, '..'), path.resolve(path.dirname(filename), name)) + '.ts', language, initialState);
     return require(name);
   };
-  vm.runInNewContext(compiled, { exports: module.exports, require: localRequire, process, console, setTimeout, clearTimeout, setInterval, clearInterval, URL, AbortController });
+  vm.runInNewContext(compiled, { exports: module.exports, require: localRequire, __initialState: initialState, process, console, setTimeout, clearTimeout, setInterval, clearInterval, URL, AbortController });
   return module.exports;
 }
 
@@ -120,4 +141,126 @@ test('Uzbek registry reserves detailed risk reasons for the patient card', () =>
   assert.doesNotMatch(html, /Og‘ir arterial gipertenziya/);
   assert.match(html, /Shifokor Rahimova/);
   assert.doesNotMatch(html, /Severe hypertension|Hypertension with proteinuria|Dr\./);
+});
+
+test('referral spelling, keyboard apostrophes and invalid dates are handled', () => {
+  assert.equal(translate('uz', "Yo'llanmalar"), 'Yo‘llanmalar');
+  for (const label of ['Yo‘llanmalar', 'Yo’llanmalar', "Yo'llanmalar", 'Yoʻllanmalar']) {
+    assert.equal(translate('ru', label), 'Направления');
+  }
+  assert.equal(translate('ru', "O'Connor"), "O'Connor");
+  assert.equal(formatDate('not-a-date', 'ru'), '—');
+  assert.equal(formatDate('', 'uz'), '—');
+});
+
+test('Russian translates measured backend findings without losing numbers', () => {
+  assert.equal(translate('ru', 'Gemoglobin 89 g/L. Kamqonlik belgisi.'), 'Гемоглобин 89 г/л. Признак анемии.');
+  assert.equal(translate('ru', 'Bilirubin 295 µmol/L. Bilirubin yuqori.'), 'Билирубин 295 мкмоль/л. Высокий билирубин.');
+  assert.equal(translate('ru', 'AQB 165/110 mmHg, proteinuriya ++. Yuqori arterial bosim va proteinuriya.'), 'АД 165/110 мм рт. ст., протеинурия ++. Высокое артериальное давление и протеинурия.');
+  assert.equal(translate('ru', 'Vazn yo‘qotilishi 8.4%. Vazn yo‘qotilishi bo‘yicha ko‘rik kerak.'), 'Потеря массы тела 8.4%. Необходим осмотр из-за потери массы тела.');
+  assert.equal(translate('ru', 'Ma’lumot yetishmaydi: sistolik bosim, emish holati'), 'Отсутствуют наблюдения: систолическое давление, кормление');
+  assert.equal(translate('ru', 'API xatosi: Bu vaqt band. Boshqa vaqtni tanlang'), 'Ошибка API: Это время занято. Выберите другое время');
+});
+
+function render(Component, props) {
+  return require('react-dom/server').renderToStaticMarkup(require('react').createElement(Component, props));
+}
+
+function assertRussian(html) {
+  const visible = html.replace(/<[^>]*>/g, ' ');
+  assert.doesNotMatch(visible, /Yo\?llanmalar|Yo‘llan|Qabul|Shifokor|kutilmo|ko‘rik|Ma’lumot|Avvalgi|Yangi o‘lchov|Bilirubin|Harorat|Kamqonlik|Namuna|Saqlanmo|Toshkent vaqti|Bemor|Dr\./);
+}
+
+test('every dashboard section renders in both languages with populated records', () => {
+  const patients = localizedModule('lib/demo.ts', 'ru').seedPatients;
+  const slot = { id: 's1', practitioner_id: 'd1', facility: 'OVaBMU markazi', start: '2026-11-19T10:00:00+05:00', end: '2026-11-19T10:30:00+05:00', available: true };
+  const data = {
+    patients, calls: [{ id: 'c1', patientId: patients[0].id, patientName: patients[0].name, target: 'Bemor', status: 'DEMO_CALL_RUNNING', statusLabel: 'AI sinov qo‘ng‘irog‘i davom etmoqda', attempts: 1, scheduledAt: slot.start }],
+    appointments: [{ id: 'a1', patient: patients[0].id, practitioner: 'rahimova', facility: slot.facility, start: slot.start, status: 'proposed' }],
+    availability: [slot], history: [], audit: [], demoStream: null, demoAnalyses: {}, source: 'mock',
+  };
+  for (const language of ['uz', 'ru']) {
+    for (const tab of ['overview', 'registry', 'appointments', 'referrals', 'voice', 'clinics', 'analytics']) {
+      const Dashboard = localizedModule('app/page.tsx', language, { tab, data, offline: false }).default;
+      const html = render(Dashboard);
+      if (language === 'ru') assertRussian(html);
+      assert.match(html, language === 'ru' ? /Направления/ : /Yo‘llanmalar/);
+      assert.doesNotMatch(html, /Yo\?|\uFFFD/);
+    }
+    for (const state of [{ sim: true }, { selected: patients[0] }, { notifications: true }, { dark: true }]) {
+      const Dashboard = localizedModule('app/page.tsx', language, { data, offline: false, ...state }).default;
+      const html = render(Dashboard);
+      if (language === 'ru') assertRussian(html);
+      assert.doesNotMatch(html, /Yo\?|\uFFFD/);
+    }
+  }
+});
+
+test('analysis feed and booking dialogs translate dynamic content and errors', () => {
+  const screens = localizedModule('app/page.tsx', 'ru').__screens;
+  const patient = { ...localizedModule('lib/demo.ts', 'ru').seedPatients[0], reason: 'Bilirubin yuqori', riskEvidence: ['Bilirubin 295 µmol/L. Bilirubin yuqori.'], analysisEligible: true };
+  const slot = { id: 's1', practitioner_id: 'd1', facility: 'OVaBMU markazi', start: '2026-11-19T10:00:00+05:00', end: '2026-11-19T10:30:00+05:00', available: true };
+  const error = 'API xatosi: Bu vaqt band. Boshqa vaqtni tanlang';
+  const cases = [
+    [screens.ObservationFeed, { active: true, disabled: false, onStart() {}, onOpen() {}, stream: { id: 'r1', status: 'STREAMING', total: 4, events: [{ id: 'e1', patient_id: patient.id, patient_name: patient.name, previous_zone: 'YELLOW', zone: 'RED', analysis_status: 'RUNNING', analysis_reason: patient.riskEvidence[0], previous_observation: { bilirubin: 238 }, observation: { bilirubin: 295, temperature: 38.4 } }] } }],
+    [screens.CaseRationale, { patient, offline: false, analysis: { status: 'COMPLETE', result: { source: 'openrouter', zone: 'RED', model: 'demo-model', review_focus: 'VERIFY_CHANGE', reasons: patient.riskEvidence } } }],
+    [screens.BookingDialog, { initialSlot: slot, initialPatientId: patient.id, patients: [patient], slots: [slot], offline: false, working: false, error, onClose() {}, onBook() {} }],
+    [screens.UrgentBookingDialog, { patient, slots: [], disabled: false, working: false, error, onClose() {}, onBook() {} }],
+    [screens.FacilityResponseForm, { offline: false, working: false, slots: [slot], rescheduling: false, onSave() {} }],
+  ];
+  for (const [Component, props] of cases) assertRussian(render(Component, props));
+  const html = render(screens.BookingDialog, cases[2][1]);
+  assert.match(html, /Ошибка API: Это время занято/);
+  assert.match(html, /Билирубин 295 мкмоль\/л/);
+});
+
+test('UI labels stay translated and contain no broken apostrophes', () => {
+  const unchanged = new Set(['Mehr', 'AI', 'MehrAI', 'v1.0', 'NA', 'Nodira Ahmedova', 'O‘zbekcha']);
+  for (const name of ['app/page.tsx', 'components/Registry.tsx']) {
+    const source = fs.readFileSync(path.join(__dirname, '..', name), 'utf8');
+    const file = ts.createSourceFile(name, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    function visit(node) {
+      if (ts.isJsxText(node) && /[a-z]/i.test(node.text)) {
+        assert.ok(unchanged.has(node.text.trim()), `Untranslated JSX in ${name}: ${node.text.trim()}`);
+      }
+      if (ts.isStringLiteral(node) || ts.isJsxText(node)) {
+        assert.doesNotMatch(node.text, /\p{L}\?\p{L}|\uFFFD/u, `Broken characters in ${name}`);
+      }
+      if (ts.isCallExpression(node) && node.expression.getText(file) === 't'
+        && node.arguments[0] && ts.isStringLiteral(node.arguments[0])) {
+        const key = node.arguments[0].text;
+        if (/[a-z]/i.test(key) && !unchanged.has(key.trim())) {
+          assert.notEqual(translate('ru', key), key, `Missing Russian translation: ${key}`);
+        }
+      }
+      ts.forEachChild(node, visit);
+    }
+    visit(file);
+  }
+});
+
+test('backend clinical labels and literal errors have Russian translations', () => {
+  const riskText = fs.readFileSync(path.join(__dirname, 'risk_text.py'), 'utf8');
+  const labels = riskText.split('FINDING_LABELS = {')[1].split('}')[0];
+  for (const match of labels.matchAll(/:\s*'([^']+)'/g)) {
+    assert.notEqual(translate('ru', match[1]), match[1], `Untranslated finding: ${match[1]}`);
+  }
+  const backend = fs.readFileSync(path.join(__dirname, 'main.py'), 'utf8');
+  for (const match of backend.matchAll(/raise HTTPException\(\d+,\s*'([^']+)'/g)) {
+    assert.notEqual(translate('ru', match[1]), match[1], `Untranslated API error: ${match[1]}`);
+  }
+});
+
+test('analytics includes pending assessments and handles empty or doctor-scoped registries', () => {
+  const patients = localizedModule('lib/demo.ts', 'ru').seedPatients;
+  for (const language of ['uz', 'ru']) {
+    const Empty = localizedModule('app/page.tsx', language, { tab: 'analytics', patients: [] }).default;
+    assert.doesNotMatch(render(Empty), /NaN|Infinity/);
+  }
+  const patient = { ...patients[0], zone: 'REVIEW' };
+  const Dashboard = localizedModule('app/page.tsx', 'ru', { tab: 'analytics', persona: patient.doctor, patients: [patient, { ...patients[1], doctor: 'alimov' }] }).default;
+  const html = render(Dashboard);
+  assert.match(html, /Требуется клиническая оценка/);
+  assert.match(html, /class="review" style="width:100%"/);
+  assert.doesNotMatch(html, /NaN|Infinity/);
 });

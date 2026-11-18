@@ -135,32 +135,6 @@ html[lang="ru"] .registry-heading>div{display:block}
   .section-picker { max-width:100%; font-size:10px; }
 }
 
-html[data-theme="dark"] {
-  color-scheme:dark;
-  --navy:#e6eff8; --text:#d5e0eb; --muted:#adbed1; --line:#344658; --blue:#79baff;
-  --surface:#192633; --raised:#223343; --canvas:#101a24;
-}
-html[data-theme="dark"] body { background:var(--canvas); color:var(--text); }
-html[data-theme="dark"] :is(.sidebar,.topbar,.panel,.drawer,.stat-card,.persona,.filter-select,.registry-search,.button,.simulation-action,.contact-outcome select,.outreach-row select,.facility-response input,.facility-response select) {
-  background:var(--surface); color:var(--text); border-color:var(--line);
-}
-html[data-theme="dark"] :is(.workspace,.workspace-status,.care-card,.language-picker,.registry-table th,.count-badge,.registry-tab span,.stat-icon,.appointment-icon,.clinic-icon,.vital-cards>div,.demo-warning,.transcript,.simulation-action>span,.patient-avatar,.user-avatar) {
-  background:var(--raised); color:var(--text); border-color:var(--line);
-}
-html[data-theme="dark"] :is(h1,h2,h3,.workspace strong,.care-card strong,.patient-name,.doctor-name,.stat-value,.clinic-name strong,.context-bar strong,.timeline-item strong,.appointment-row strong,.clinical-values,.drawer strong,.security-note strong,.facility-response label,.registry-search input,.persona select,.stat-top,.analytics-bars strong,.simulation-action strong) { color:#e5eef8; }
-html[data-theme="dark"] :is(.breadcrumbs,.nav-item,.page-heading p,.drawer p,.registry-heading p,.panel-heading p,.care-card p,.registry-tab,.registry-footer,.patient-meta,.process-time,.doctor-specialty,.workflow-empty,.outreach-row p,.clinic-name small,.clinic-legend,.security-note p,.appointment-row p,.stat-bottom,.stat-mini,.text-button,.patient-contact p,.main-footer,.language-picker button,.detail-block small,.eyebrow) { color:var(--muted); }
-html[data-theme="dark"] :is(.button,.icon-button,.patient-row,.nav-item,.appointment-row,.simulation-action,.workspace):hover { background:#293c50; }
-html[data-theme="dark"] :is(.nav-item.active,.language-picker button[aria-pressed="true"],.workspace-icon) { background:#254566; color:#b4d8ff; }
-html[data-theme="dark"] .button.primary { background:#1669b6; color:white; border-color:#338bdc; }
-html[data-theme="dark"] :is(.registry-table th,.registry-table td,.registry-tabs,.registry-footer,.context-bar,.outreach-row,.detail-block,.appointment-row,.clinic-row,.main-footer,.sidebar-footer,.drawer-top,.simulation-action) { border-color:var(--line); }
-html[data-theme="dark"] .stat-card.red { border-top-color:#e67e88; }
-html[data-theme="dark"] .stat-card.amber { border-top-color:#dab570; }
-html[data-theme="dark"] .stat-card.green { border-top-color:#71c4a9; }
-html[data-theme="dark"] :is(.alert-strip,.priority-row) { background:#382730; border-color:#65414d; }
-html[data-theme="dark"] :is(.alert-strip strong,.alert-strip p,.alert-strip button,.status-urgent,.countdown,.vital-red) { color:#ffc0c5; }
-html[data-theme="dark"] .registry-tab.active { color:var(--blue); }
-html[data-theme="dark"] .mehr-brand-ai { color:#63c8bc; }
-html[data-theme="dark"] .registry-search input::placeholder { color:var(--muted); }
 
 .phone-actions { display:grid; gap:10px; margin:12px 0; }
 .phone-actions form { display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap; }
@@ -169,7 +143,6 @@ html[data-theme="dark"] .registry-search input::placeholder { color:var(--muted)
 .call-history { padding:12px 16px; }
 .call-history .outreach-row { padding:8px 0; gap:8px; }
 .call-history .missed-call { color:#b42335; }
-html[data-theme="dark"] .call-history .missed-call { color:#ffb0b7; }
 
 .case-notification{display:block;width:100%;text-align:left}
 .case-notification:hover{background:#f0f6ff}
@@ -200,3 +173,125 @@ html[data-theme="dark"] .call-history .missed-call { color:#ffb0b7; }
 @keyframes demo-analysis-spin{to{transform:rotate(360deg)}}
 @media(prefers-reduced-motion:reduce){.demo-analysis-spinner{animation:none}}
 .demo-stream-start{width:100%;margin-bottom:4px}
+.clinic-bar .review,.bar-track .review,i.review{background:#a4afbf}
+.clinic-legend{flex-wrap:wrap}
+
+/* Keep theme overrides after component styles, including dialogs and live analysis. */
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --navy: #e8f0f8;
+  --text: #d5e0eb;
+  --muted: #a6b8ca;
+  --line: #344658;
+  --blue: #79baff;
+  --surface: #192633;
+  --raised: #223343;
+  --canvas: #101a24;
+  --hover: #293c50;
+  --blue-surface: #203e5d;
+  --blue-text: #aed5ff;
+  --red-surface: #3b2631;
+  --red-text: #ffadb7;
+  --amber-surface: #3a3221;
+  --amber-text: #f4ce7e;
+  --green-surface: #183a33;
+  --green-text: #88dfba;
+  --purple-surface: #322b48;
+  --purple-text: #cbb4ff;
+  scrollbar-color: #52677c var(--canvas);
+}
+html[data-theme="dark"] body { background: var(--canvas); color: var(--text); }
+html[data-theme="dark"] :is(.sidebar,.topbar,.panel,.drawer,.stat-card,.persona,.filter-select,.registry-search,.button,.simulation-action,.booking-dialog) {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--line);
+}
+html[data-theme="dark"] :is(.workspace,.workspace-status,.care-card,.language-picker,.registry-table th,.count-badge,.registry-tab span,.stat-icon,.appointment-icon,.clinic-icon,.vital-cards>div,.demo-warning,.transcript,.simulation-action>span,.patient-avatar,.user-avatar,.demo-comparison>div,.booking-slot,.bar-track) {
+  background: var(--raised);
+  color: var(--text);
+  border-color: var(--line);
+}
+html[data-theme="dark"] :is(h1,h2,h3,.workspace strong,.care-card strong,.patient-name,.doctor-name,.stat-value,.clinic-name strong,.context-bar strong,.timeline-item strong,.appointment-row strong,.clinical-values,.drawer strong,.security-note strong,.facility-response label,.stat-top,.analytics-bars strong,.simulation-action strong,.breadcrumbs strong,.patient-dialog .detail-block h3) {
+  color: var(--navy);
+}
+html[data-theme="dark"] :is(.breadcrumbs,.nav-item,.nav-caption,.page-heading p,.drawer p,.registry-heading p,.panel-heading p,.care-card p,.registry-tab,.registry-footer,.patient-meta,.patient-reason,.process-time,.doctor-specialty,.workflow-empty,.outreach-row p,.clinic-name small,.clinic-counts,.clinic-legend,.security-note p,.appointment-row p,.stat-bottom,.stat-mini,.text-button,.patient-contact p,.detail-block>p,.main-footer,.language-picker button,.detail-block small,.eyebrow,.workspace small,.timeline-item p,.timeline-item small,.simulation-action p,.patient-dialog-status,.case-rationale summary,.booking-more,.demo-feed-empty,.demo-feed-progress,.demo-event-review,.demo-comparison dt,.muted,.demo-label,.realtime) {
+  color: var(--muted);
+}
+html[data-theme="dark"] :is(.registry-table th,.registry-table td,.registry-tabs,.registry-footer,.context-bar,.outreach-row,.detail-block,.appointment-row,.clinic-row,.main-footer,.sidebar-footer,.drawer-top,.simulation-action,.demo-label,.demo-feed) {
+  border-color: var(--line);
+}
+html[data-theme="dark"] :is(input,select,textarea,option,optgroup) {
+  background-color: var(--surface);
+  color: var(--text);
+  border-color: var(--line);
+}
+html[data-theme="dark"] :is(.facility-response input,.facility-response select,.availability-doctor,.booking-patient select,.booking-patient input,.phone-actions input,.contact-outcome input,.contact-outcome select,.outreach-row select) {
+  background: var(--canvas);
+  color: var(--navy);
+  border-color: var(--line);
+}
+html[data-theme="dark"] :is(.registry-search input,.persona select) { background: transparent; color: var(--text); }
+html[data-theme="dark"] :is(input,textarea)::placeholder { color: var(--muted); opacity: 1; }
+html[data-theme="dark"] :is(.button,.icon-button,.patient-row,.nav-item,.appointment-row,.simulation-action,.workspace,.case-notification):hover {
+  background: var(--hover);
+}
+html[data-theme="dark"] :is(.nav-item.active,.language-picker button[aria-pressed="true"],.workspace-icon,.nav-item b,.booking-times .button[aria-pressed="true"]) {
+  background: var(--blue-surface);
+  color: var(--blue-text);
+}
+html[data-theme="dark"] .booking-times .button[aria-pressed="true"] { border-color: var(--blue); }
+html[data-theme="dark"] .button.primary { background: #176bb6; color: #fff; border-color: #338bdc; }
+html[data-theme="dark"] .button.primary:hover { background: #1a73c3; }
+html[data-theme="dark"] :is(button,input,select):disabled { opacity: .55; }
+html[data-theme="dark"] :is(.registry-tab.active,.demo-measurement-changed) { color: var(--blue); }
+html[data-theme="dark"] .registry-tab.active { border-color: var(--blue); }
+html[data-theme="dark"] .mehr-brand-ai { color: #63c8bc; }
+html[data-theme="dark"] .context-separator { background: var(--line); }
+html[data-theme="dark"] .notification-button i { border-color: var(--surface); }
+
+html[data-theme="dark"] .stat-card.red { border-top-color: #e67e88; }
+html[data-theme="dark"] .stat-card.amber { border-top-color: #dab570; }
+html[data-theme="dark"] .stat-card.green { border-top-color: #71c4a9; }
+html[data-theme="dark"] :is(.alert-strip,.priority-row) { background: var(--red-surface); border-color: #65414d; }
+html[data-theme="dark"] :is(.alert-icon,.red .stat-icon,.badge.red,.zone-red,.timeline-item.red .timeline-dot,.simulation-action.red>span) {
+  background: var(--red-surface); color: var(--red-text);
+}
+html[data-theme="dark"] .alert-icon { background: #54303d; }
+html[data-theme="dark"] :is(.alert-strip strong,.alert-strip p,.alert-strip button,.alert-time,.status-urgent,.process-time.countdown,.clinical-values .vital-red,.booking-error,.call-history .missed-call) { color: var(--red-text); }
+html[data-theme="dark"] :is(.amber .stat-icon,.badge.amber,.zone-yellow,.booking-review,.timeline-item.amber .timeline-dot,.simulation-action.amber>span) {
+  background: var(--amber-surface); color: var(--amber-text);
+}
+html[data-theme="dark"] .clinical-values .vital-yellow { color: var(--amber-text); }
+html[data-theme="dark"] :is(.green .stat-icon,.badge.green,.zone-green,.timeline-item.green .timeline-dot,.care-orbit) {
+  background: var(--green-surface); color: var(--green-text);
+}
+html[data-theme="dark"] :is(.success-text,.process-status:not(.status-urgent)) { color: var(--green-text); }
+html[data-theme="dark"] :is(.badge.blue,.timeline-dot) { background: var(--blue-surface); color: var(--blue-text); }
+html[data-theme="dark"] :is(.timeline-item.purple .timeline-dot,.simulation-action.purple>span) {
+  background: var(--purple-surface); color: var(--purple-text);
+}
+html[data-theme="dark"] .zone-review { background: #2b3947; color: #c6d3e0; }
+html[data-theme="dark"] :is(.clinic-bar .review,.bar-track .review,i.review) { background: #8c9fb3; }
+html[data-theme="dark"] .timeline-item:not(:last-child):before { background: var(--line); }
+html[data-theme="dark"] .care-line { border-color: #355c58; box-shadow: 0 0 0 15px #23403d66,0 0 0 30px #23403d44; }
+
+html[data-theme="dark"] .voice-panel { background: linear-gradient(145deg,#202f46,#2b2944); border-color: #3d4363; }
+html[data-theme="dark"] :is(.voice-icon,.voice-heading h2 span) { background: #39365a; color: var(--purple-text); }
+html[data-theme="dark"] :is(.voice-heading h2,.voice-metrics strong) { color: #d0c6ff; }
+html[data-theme="dark"] :is(.voice-heading p,.voice-state,.voice-description,.voice-footnote,.voice-metrics span) { color: #b3b9d3; }
+html[data-theme="dark"] .voice-metrics { background: #19263380; border-color: #454766; }
+html[data-theme="dark"] .voice-metrics>div+div { border-color: #454766; }
+html[data-theme="dark"] :is(.voice-start,.voice-responses button) { background: #30324d; border-color: #4b4e70; color: #ddd8ff; }
+html[data-theme="dark"] :is(.voice-start,.voice-responses button):hover { background: #3d405f; }
+
+html[data-theme="dark"] .demo-feed { border-top-color: var(--blue); }
+html[data-theme="dark"] .demo-feed>.panel-heading { background: #1c3043; }
+html[data-theme="dark"] .demo-feed .panel-heading h2 { color: var(--blue-text); }
+html[data-theme="dark"] .demo-feed .panel-heading p { color: var(--muted); }
+html[data-theme="dark"] .demo-feed-progress progress { accent-color: var(--blue); }
+html[data-theme="dark"] .demo-comparison dd { color: var(--text); }
+html[data-theme="dark"] .demo-analysis-spinner { border-color: #405b76; border-top-color: var(--blue); }
+html[data-theme="dark"] .overlay,
+html[data-theme="dark"] .booking-dialog::backdrop { background: #050d18b3; }
+html[data-theme="dark"] :is(.booking-dialog,.patient-dialog,.notification-popover) { box-shadow: 0 24px 80px #0007; }
+html[data-theme="dark"] .toast { background: var(--raised); color: var(--navy); border: 1px solid var(--line); box-shadow: 0 10px 40px #0005; }

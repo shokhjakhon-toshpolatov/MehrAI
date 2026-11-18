@@ -59,6 +59,169 @@ export const uzbek: Record<string, string> = {
 
 // Existing Uzbek UI strings also serve as keys for the Russian translation.
 export const russian: Record<string, string> = {
+  "Qabullar": "Приёмы",
+  "Yo‘llanmalar": "Направления",
+  "Qabullar jadvali": "Расписание приёмов",
+  "Klinik ko‘rik va yo‘llanmalar": "Осмотры и направления",
+  "Klinik baho kerak": "Требуется клиническая оценка",
+  "Yorug‘ rejim": "Светлый режим",
+  "Shifokor ko‘rigi kutilmoqda": "Ожидается осмотр врача",
+  "Mas’ul shifokor natijalarni ko‘rib, yo‘llanmani tasdiqlaydi.": "Ответственный врач проверяет результаты и подтверждает направление.",
+  "Ko‘rik kutilayotgan yo‘llanma yo‘q.": "Нет направлений, ожидающих осмотра.",
+  "Ko‘rik kutilmoqda": "Ожидается осмотр",
+  "Bemor kartasida bo‘sh vaqtni tanlang yoki muassasa bildirgan vaqtni kiriting.": "Выберите свободное время в карте пациента или укажите время, согласованное с учреждением.",
+  "Shifokorning bo‘sh vaqtlari": "Свободное время врача",
+  "Namunaviy jadval": "Демонстрационное расписание",
+  "Jadval uchun shifokor": "Врач в расписании",
+  "Jadvalni ko‘rish uchun mahalliy API’ga ulaning.": "Подключитесь к локальному серверу, чтобы посмотреть расписание.",
+  "Namunaviy jadval mavjud emas.": "Демонстрационное расписание отсутствует.",
+  "Sana va vaqt": "Дата и время",
+  "Muassasa": "Учреждение",
+  "Amal": "Действие",
+  "Bo‘sh": "Свободно",
+  "Band": "Занято",
+  "Qabul belgilash": "Назначить приём",
+  "Tuman qabullari": "Приёмы по району",
+  "Qabullar · {doctor}": "Приёмы · {doctor}",
+  "Jadval qabul qiluvchi shifokor bo‘yicha ko‘rsatiladi.": "Расписание показано по принимающему врачу.",
+  "Qabul vaqti": "Время приёма",
+  "Ko‘rsatilmagan": "Не указано",
+  "Kelganini qayd etish": "Отметить явку",
+  "AI qo‘ng‘iroqlari va tizim qayd etgan holatlar": "Демонстрационные звонки ИИ и статусы системы",
+  "Qabul vaqti ·": "Время приёма ·",
+  "Yangi bildirishnoma yo‘q.": "Новых уведомлений нет.",
+  "Shoshilinch klinik ko‘rik": "Срочный осмотр врача",
+  "Yo‘llanmani ko‘rib chiqish": "Проверка направления",
+  "Ma’lumotlar oqimini boshlash": "Запустить поток данных",
+  "Sinov IT-MED API · 4 ta namunaviy kuzatuv ketma-ket keladi.": "Симуляция API IT-MED · последовательно поступят 4 демонстрационных наблюдения.",
+  "Yangi kuzatuvda o‘zgarish aniqlandi": "В новом наблюдении обнаружено изменение",
+  "Avval:": "Ранее:",
+  "Ko‘rib chiqilganini qayd etish": "Отметить проверку",
+  "AI qo‘ng‘irog‘i": "Демонстрационный звонок ИИ",
+  "Onasi:": "Мать:",
+  "Namuna vasiy": "Демонстрационный опекун",
+  "Sinov qo‘ng‘irog‘ida qabul sanasi va vaqti ko‘rsatiladi. Haqiqiy telefon raqami terilmaydi.": "В симуляции отображаются дата и время приёма. Реальный номер телефона не набирается.",
+  "Sinov ma’lumotlari oqimi": "Поток демонстрационных данных",
+  "Kuzatuv keladi, avvalgi o‘lchovlar bilan solishtiriladi va AI dalillarni ko‘rib chiqadi.": "Поступающее наблюдение сравнивается с предыдущими измерениями, затем ИИ проверяет данные.",
+  "Oqim davom etmoqda": "Поток данных запущен",
+  "Oqimni qayta boshlash": "Перезапустить поток",
+  "Kuzatuvlar soni": "Число наблюдений",
+  "kuzatuv ·": "наблюдений ·",
+  "Jarayon davom etmoqda": "Обработка продолжается",
+  "Birinchi kuzatuv kutilmoqda…": "Ожидается первое наблюдение…",
+  "Hali kuzatuv kelmagan.": "Наблюдения ещё не поступили.",
+  "AI tahlil qilmoqda…": "ИИ анализирует…",
+  "Tekshiruv navbatda": "В очереди на проверку",
+  "AI ko‘rib chiqdi": "Проверено ИИ",
+  "AI mavjud emas · qoida natijasi": "ИИ недоступен · оценка по правилам",
+  "Qoida bo‘yicha baholandi": "Оценено по правилам",
+  "Avvalgi o‘lchovlar": "Предыдущие измерения",
+  "Yangi o‘lchovlar": "Новые измерения",
+  "Mavjud emas": "Нет данных",
+  "Xavf belgisi sababi": "Основания для оценки риска",
+  "Qolgan dalillar": "Остальные данные",
+  "Namuna mutaxassis bahosi": "Демонстрационная оценка специалиста",
+  "AI tahlilchi · {model}": "ИИ-анализатор · {model}",
+  "Namuna qoidalari asosida": "На основе демонстрационных правил",
+  "Shifokor uchun:": "Для врача:",
+  "Avvalgi va yangi ko‘rsatkichlar o‘rtasidagi o‘zgarishni tekshiring.": "Проверьте изменение между предыдущими и новыми показателями.",
+  "Yetishmayotgan kuzatuv ma’lumotlarini tekshiring.": "Проверьте недостающие данные наблюдения.",
+  "AI tahlilchi yangi kuzatuvni tekshirmoqda.": "ИИ-анализатор проверяет новое наблюдение.",
+  "Kuzatuv tekshiruv navbatida.": "Наблюдение в очереди на проверку.",
+  "OpenRouter sozlanmagan. Qoida dalillari ko‘rsatilmoqda.": "ИИ-анализатор не настроен. Показаны данные оценки по правилам.",
+  "AI tahlili vaqtincha mavjud emas. Qoida dalillari ko‘rsatilmoqda.": "Анализ ИИ временно недоступен. Показаны данные оценки по правилам.",
+  "AI tahlili xavf darajasi qizilga o‘zgarganda ishga tushadi.": "Анализ ИИ запускается при переходе в красную зону риска.",
+  "AI tahlili uchun yangi o‘lchov o‘zgarishi yoki bir nechta klinik dalil kerak.": "Для анализа ИИ необходимо изменение измерений или несколько клинических признаков.",
+  "Dalillar ko‘rib chiqilmoqda…": "Данные проверяются…",
+  "AI tahlilini qayta olish": "Повторить анализ ИИ",
+  "AI tahlilini olish": "Получить анализ ИИ",
+  "Shoshilinch qabul belgilash": "Назначить срочный приём",
+  "Bo‘sh vaqtlarga qaytish": "Вернуться к свободному времени",
+  "Boshqa vaqt kiritish": "Указать другое время",
+  "Qabul sanasi": "Дата приёма",
+  "Vaqti (Toshkent)": "Время (Ташкент)",
+  "Saqlanmoqda…": "Сохранение…",
+  "Qabulni saqlash va AI qo‘ng‘irog‘ini boshlash": "Сохранить приём и запустить симуляцию звонка ИИ",
+  "Bemorni tanlang": "Выберите пациента",
+  "Qabul belgilash uchun yo‘llanma mavjud emas.": "Нет направления для назначения приёма.",
+  "Boshqa shifokor yoki vaqt": "Другой врач или время",
+  "Shifokor va qabul vaqti": "Врач и время приёма",
+  "Bo‘sh vaqtni tanlang": "Выберите свободное время",
+  "Mas’ul shifokor ·": "Ответственный врач ·",
+  "Qabul saqlangach, AI sinov qo‘ng‘irog‘i avtomatik navbatga qo‘yiladi.": "После сохранения приёма симуляция звонка ИИ автоматически добавляется в очередь.",
+  "Bu vaqtni hozir saqlab bo‘lmaydi. Jadvalni tekshiring.": "Сейчас это время нельзя сохранить. Проверьте расписание.",
+  "Yo‘llanmani tasdiqlash va qabulni saqlash": "Подтвердить направление и сохранить приём",
+  "Qabulni saqlash": "Сохранить приём",
+  "Eng yaqin bo‘sh vaqtlar (Toshkent)": "Ближайшее свободное время (Ташкент)",
+  "Saqlash uchun mahalliy API’ga ulaning. Maydonlarni hozir ham to‘ldirishingiz mumkin.": "Для сохранения подключитесь к локальному серверу. Поля можно заполнить заранее.",
+  "Namunaviy jadvaldan bo‘sh vaqt": "Свободное время из демонстрационного расписания",
+  "Vaqtni qo‘lda kiriting": "Укажите время вручную",
+  "Server ulanmagan · saqlash va ma’lumotlar oqimi uchun mahalliy API’ni ishga tushiring.": "Сервер не подключён · запустите локальный сервер для сохранения и потока данных.",
+  "Server ulangan · sun’iy ma’lumotlar": "Сервер подключён · вымышленные данные",
+  "Yo‘llanma tasdiqlandi": "Направление подтверждено",
+  "Shoshilinch aloqa tasdiqlandi": "Срочная связь подтверждена",
+  "Shoshilinch qabul belgilandi": "Назначен срочный приём",
+  "Sinov qo‘ng‘irog‘i boshlandi": "Симуляция звонка началась",
+  "Sinov qo‘ng‘irog‘i yakunlandi": "Симуляция звонка завершена",
+  "AI sinov qo‘ng‘irog‘i navbatda": "Симуляция звонка ИИ в очереди",
+  "AI sinov qo‘ng‘irog‘i davom etmoqda": "Симуляция звонка ИИ выполняется",
+  "AI sinov qo‘ng‘irog‘i yakunlandi": "Симуляция звонка ИИ завершена",
+  "Bemor identifikatori kerak": "Необходим идентификатор пациента",
+  "Avval yo‘llanmani tasdiqlang va muassasa tashrifini qayd eting": "Сначала подтвердите направление и запишите визит в учреждение",
+  "Qabul vaqtining mintaqasi kerak": "Укажите часовой пояс приёма",
+  "Faqat rejali yo‘llanma tasdiqlanishi mumkin": "Подтвердить можно только плановое направление",
+  "Yo‘llanmani mas’ul shifokor tasdiqlaydi": "Направление подтверждает ответственный врач",
+  "Mas’ul shifokor avval shoshilinch holatni ko‘rib chiqishi kerak": "Ответственный врач должен сначала рассмотреть экстренный случай",
+  "Aloqani mas’ul shifokor tasdiqlaydi": "Связь подтверждает ответственный врач",
+  "Qizil holat uchun qabulni mas’ul shifokor belgilaydi": "Приём для случая в красной зоне назначает ответственный врач",
+  "Qabul allaqachon belgilangan": "Приём уже назначен",
+  "Joriy holat uchun qabul belgilab bo‘lmaydi": "В текущем состоянии назначить приём нельзя",
+  "Kelajakdagi qabul vaqtini tanlang": "Выберите время приёма в будущем",
+  "Bu vaqt band. Boshqa vaqtni tanlang": "Это время занято. Выберите другое время",
+  "Bu vaqt endi bo‘sh emas. Boshqa vaqtni tanlang": "Это время уже занято. Выберите другое время",
+  "Avval mas’ul shifokor yo‘llanmani tasdiqlashi kerak": "Сначала ответственный врач должен подтвердить направление",
+  "Shoshilinch aloqa natijasi sinov jarayonida avtomatik qayd etiladi": "В симуляции результат срочной связи записывается автоматически",
+  "Shoshilinch holat uchun rejali aloqa natijasi qabul qilinmaydi": "Для экстренного случая нельзя записать результат плановой связи",
+  "Qo‘ng‘iroq holatini tekshirib bo‘lmadi": "Не удалось проверить статус звонка",
+  "Qo‘ng‘iroq klinik tasdiqdan keyin avtomatik boshlanadi": "Симуляция звонка запускается автоматически после подтверждения врача",
+  "Boshqariladigan holat uchun muassasa javobi orqali qabulni yozing": "Для этого случая запишите приём через ответ учреждения",
+  // Display descriptions returned by the backend, including measured evidence.
+  "Arterial bosim juda yuqori": "Очень высокое артериальное давление",
+  "Yuqori arterial bosim va proteinuriya": "Высокое артериальное давление и протеинурия",
+  "Og‘ir kamqonlik belgisi": "Признак тяжёлой анемии",
+  "Qon ketishi qayd etilgan": "Зафиксировано кровотечение",
+  "Homila harakati kamaygan": "Двигательная активность плода снижена",
+  "Kamqonlik belgisi": "Признак анемии",
+  "Arterial bosim ko‘tarilgan": "Артериальное давление повышено",
+  "Arterial bosim avvalgi darajadan oshgan": "Артериальное давление повысилось относительно предыдущего уровня",
+  "Proteinuriya aniqlangan": "Выявлена протеинурия",
+  "Endokrinolog ko‘rigi kerak": "Необходим осмотр эндокринолога",
+  "Yurak ritmi buzilishi qayd etilgan": "Зафиксировано нарушение сердечного ритма",
+  "Bilirubin yuqori": "Высокий билирубин",
+  "Birinchi 24 soatda sariqlik kuzatilgan": "Желтуха в первые 24 часа",
+  "Chaqaloq harorati me’yordan tashqarida": "Температура новорождённого вне нормы",
+  "Kislorod bilan to‘yinish past": "Низкая сатурация кислорода",
+  "Chaqaloqda xavf belgisi qayd etilgan": "У новорождённого зафиксирован опасный признак",
+  "Sariqlik bo‘yicha ko‘rik kerak": "Необходим осмотр по поводу желтухи",
+  "Vazn yo‘qotilishi bo‘yicha ko‘rik kerak": "Необходим осмотр из-за потери массы тела",
+  "Haroratni qayta tekshirish kerak": "Необходимо повторно проверить температуру",
+  "Kislorod bilan to‘yinishni tekshirish kerak": "Необходимо проверить сатурацию кислорода",
+  "Kindik atrofida qizarish kuzatilgan": "Покраснение в области пупка",
+  "TTG natijasida o‘zgarish qayd etilgan": "Зафиксировано изменение уровня ТТГ",
+  "sistolik bosim": "систолическое давление",
+  "diastolik bosim": "диастолическое давление",
+  "gemoglobin": "гемоглобин",
+  "glyukoza": "глюкоза",
+  "proteinuriya": "протеинурия",
+  "proteinuriya natijasining tasdig‘i": "подтверждение результата протеинурии",
+  "chaqaloq yoshi": "возраст новорождённого",
+  "harorat": "температура",
+  "vazn yo‘qotilishi": "потеря массы тела",
+  "emish holati": "кормление",
+  "emish holatining tasdig‘i": "подтверждение оценки кормления",
+  "yoshiga mos neonatal baholash": "оценка новорождённого с учётом возраста",
+  "baseline_systolic": "исходное систолическое давление",
+  "baseline_diastolic": "исходное диастолическое давление",
   "So‘rov yuborilmoqda": "Запрос отправляется",
   "Telefon jiringlamoqda": "Идёт вызов",
   "Aloqa o‘rnatildi": "Соединение установлено",
@@ -404,12 +567,23 @@ export function translate(language: Language, text: string, values?: Record<stri
   if (!text.trim()) return text;
   let result = text;
   const dictionary = language === "ru" ? russian : uzbek;
+  // Older records and different keyboards can use other apostrophe characters.
+  // Normalize lookup keys only; preserve names and unknown free text verbatim.
+  const key = text.replace(/([a-z])[‘’ʻʼ'`](?=[a-z])/gi, (_, letter: string) => letter + (/[og]/i.test(letter) ? "‘" : "’"));
   if (Object.hasOwn(dictionary, text)) result = dictionary[text];
+  else if (Object.hasOwn(dictionary, key)) result = dictionary[key];
+  else if (language === "uz" && Object.hasOwn(russian, key)) result = key;
   else if (text.trim() !== text) result = (text.match(/^\s*/)?.[0] ?? "") + translate(language, text.trim()) + (text.match(/\s*$/)?.[0] ?? "");
-  else if (text.includes(" · ")) result = text.split(" · ").map(part => translate(language, part)).join(" · ");
-  else if (text.startsWith("Missing observations: ")) result = (language === "ru" ? "Отсутствуют наблюдения: " : "Kiritilmagan ko‘rsatkichlar: ") + text.slice(22).split(", ").map(part => translate(language, part)).join(", ");
+  else if (key.startsWith("Ma’lumot yetishmaydi: ") || text.startsWith("Missing observations: ")) {
+    const fields = text.slice(text.indexOf(": ") + 2);
+    result = (language === "ru" ? "Отсутствуют наблюдения: " : "Kiritilmagan ko‘rsatkichlar: ") + fields.split(", ").map(part => translate(language, part)).join(", ");
+  }
   else if (text.startsWith("API xatosi: ")) result = (language === "ru" ? "Ошибка API: " : "API xatosi: ") + translate(language, text.slice(12));
+  else if (text.startsWith("Telefon sozlamalari: ")) result = translate(language, "Telefon sozlamalari:") + " " + text.slice("Telefon sozlamalari: ".length);
   else if (/^Dr\. /.test(text)) result = text.replace(/^Dr\. /, language === "ru" ? "Д-р " : "Shifokor ");
+  else if (text.includes(" · ")) result = text.split(" · ").map(part => translate(language, part)).join(" · ");
+  else if (text.includes(". ")) result = text.split(/(?<=\.)\s+/).map(part => translate(language, part)).join(" ");
+  else if (/[.!]$/.test(text) && (Object.hasOwn(dictionary, text.slice(0, -1)) || Object.hasOwn(dictionary, key.slice(0, -1)))) result = translate(language, text.slice(0, -1)) + text.slice(-1);
   else if (/ must be numeric$/.test(text)) result = translate(language, text.replace(/ must be numeric$/, "")) + (language === "ru" ? ": требуется число" : ": son kiritilishi kerak");
   else if (/ must be a finite nonnegative number$/.test(text)) result = translate(language, text.replace(/ must be a finite nonnegative number$/, "")) + (language === "ru" ? ": требуется конечное неотрицательное число" : ": chekli va manfiy bo‘lmagan son kiritilishi kerak");
   else if (/ not found$/.test(text)) result = text.replace(/ not found$/, language === "ru" ? " не найден" : " topilmadi");
@@ -419,16 +593,19 @@ export function translate(language: Language, text: string, values?: Record<stri
     else if (/^(\d+|—) kunlik$/.test(text)) result = text.replace(/ kunlik$/, " дн.");
     else if (/^Tug‘ruqdan keyin (\d+|—) kun$/.test(text)) result = text.replace(/^Tug‘ruqdan keyin (.+) kun$/, "$1 дн. после родов");
     else if (/^\d+-noyabr$/.test(text)) result = text.replace(/-noyabr$/, " нояб.");
-    else if (/^(AQB|Hb|Glyukoza|Proteinuriya|Bilirubin|Harorat|Vazn) /.test(text)) {
-      const labels: Record<string, string> = { AQB: "АД", Hb: "Hb", Glyukoza: "Глюкоза", Proteinuriya: "Протеинурия", Bilirubin: "Билирубин", Harorat: "Температура", Vazn: "Масса тела" };
-      result = text.replace(/^\S+/, label => labels[label]).replace(/mmHg/g, "мм рт. ст.").replace(/µmol\/L/g, "мкмоль/л").replace(/mmol\/L/g, "ммоль/л").replace(/g\/L/g, "г/л");
+    else if (/^(AQB|Hb|Gemoglobin|Glyukoza|Proteinuriya|Bilirubin|Harorat|Vazn(?: yo‘qotilishi)?) [-−+\d]/.test(text)) {
+      const labels: Record<string, string> = { AQB: "АД", Hb: "Hb", Gemoglobin: "Гемоглобин", Glyukoza: "Глюкоза", Proteinuriya: "Протеинурия", Bilirubin: "Билирубин", Harorat: "Температура", Vazn: "Масса тела", "Vazn yo‘qotilishi": "Потеря массы тела" };
+      result = text.replace(/^(Vazn yo‘qotilishi|\S+)/, label => labels[label]).replace(/mmHg/g, "мм рт. ст.").replace(/µmol\/L/g, "мкмоль/л").replace(/mmol\/L/g, "ммоль/л").replace(/g\/L/g, "г/л").replace(/, proteinuriya /g, ", протеинурия ").replace(/\bmusbat\b/g, "положительная");
     }
+    else if (/^Bemor .+ uchun xavf bahosi topilmadi\.$/.test(text)) result = text.replace(/^Bemor (.+) uchun xavf bahosi topilmadi\.$/, "Для пациента $1 не найдена оценка риска.");
   }
   return values ? result.replace(/\{(\w+)\}/g, (match, key) => String(values[key] ?? match)) : result;
 }
 
 export function formatDate(value: string, language: Language): string {
-  return new Date(value).toLocaleString(language === "ru" ? "ru-RU" : "uz-UZ", {
+  const date = new Date(value);
+  if (!value || Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleString(language === "ru" ? "ru-RU" : "uz-UZ", {
     timeZone: "Asia/Tashkent", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
   });
 }

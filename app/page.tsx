@@ -207,7 +207,7 @@ export default function Dashboard() {
     } catch (error) {
       await refresh();
       reportError(
-        error instanceof Error ? error.message : "Saqlash amalga oshmadi",
+        error instanceof Error ? error.message : t("Saqlash amalga oshmadi"),
       );
     } finally {
       setWorking(false);
@@ -237,7 +237,7 @@ export default function Dashboard() {
     scoped.some((p) => p.id === c.patientId),
   );
   const tasks = calls.filter((c) =>
-    ["DEMO_CALL_QUEUED", "DEMO_CALL_RUNNING"].includes(c.status),
+    ["DEMO_CALL_QUEUED", "DEMO_CALL_RUNNING", "READY", "QUEUED", "NO_ANSWER", "STAFF_FOLLOW_UP"].includes(c.status),
   );
   const emergency = scoped.filter(
     (p) => p.zone === "RED" && !p.urgentOutreachApprovedAt,
@@ -338,6 +338,7 @@ export default function Dashboard() {
     RED: scoped.filter((p) => p.zone === "RED").length,
     YELLOW: scoped.filter((p) => p.zone === "YELLOW").length,
     GREEN: scoped.filter((p) => p.zone === "GREEN").length,
+    REVIEW: scoped.filter((p) => p.zone === "REVIEW").length,
   };
   const sections = [
             {
@@ -354,9 +355,9 @@ export default function Dashboard() {
             {
               id: "appointments",
               icon: CalendarDays,
-              label: t("Yo‘llanmalar va qabullar"),
+              label: t("Qabullar"),
             },
-            { id: "referrals", icon: Stethoscope, label: t("Yo?llanmalar") },
+            { id: "referrals", icon: Stethoscope, label: t("Yo‘llanmalar") },
             { id: "voice", icon: Phone, label: t("Bemorlar bilan aloqa") },
             { id: "clinics", icon: Building2, label: t("Poliklinikalar") },
             { id: "analytics", icon: Activity, label: t("Tahlil va hisobotlar") },
@@ -453,7 +454,7 @@ export default function Dashboard() {
             <div className="language-picker" role="group" aria-label={t("Interfeys tili")}>
               {(["uz", "ru"] as const).map(code => (
                 <button key={code} type="button" lang={code}
-                  aria-label={code === "uz" ? "O‘zbekcha" : "Русский"}
+                  aria-label={code === "uz" ? t("O‘zbekcha") : "Русский"}
                   aria-pressed={language === code} onClick={() => setLanguage(code)}>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img className="language-flag" src={`/flags/${code}.svg`} width={20} height={20} alt="" />
@@ -461,7 +462,7 @@ export default function Dashboard() {
                 </button>
               ))}
             </div>
-            <button className="icon-button" type="button" aria-label={t("Qorong‘i rejim")} title={t("Qorong‘i rejim")} aria-pressed={dark} onClick={toggleTheme}>
+            <button className="icon-button" type="button" aria-label={t(dark ? "Yorug‘ rejim" : "Qorong‘i rejim")} title={t(dark ? "Yorug‘ rejim" : "Qorong‘i rejim")} aria-pressed={dark} onClick={toggleTheme}>
               {dark ? <Sun size={18} /> : <Moon size={18} />}
             </button>
             <button
@@ -503,9 +504,7 @@ export default function Dashboard() {
             </div>
             <div className="intro-actions">
               <button className="button" onClick={() => setSim(true)}>
-                <Zap size={16} />
-                Demo simulyator
-              </button>
+                <Zap size={16} />{t("Demo simulyator")}</button>
             </div>
           </div>
           <div className="context-bar">
@@ -535,7 +534,7 @@ export default function Dashboard() {
           <div className="workspace-status" role="status">
             {offline
               ? t("Server ulanmagan · saqlash va ma’lumotlar oqimi uchun mahalliy API’ni ishga tushiring.")
-              : t("Server ulangan · sun’iy ma’lumotlar · tashqi qo‘ng‘iroqlar o‘chirilgan")}
+              : t("Server ulangan · sun’iy ma’lumotlar")}
           </div>
           {tab === "overview" && (
             <ObservationFeed
@@ -705,7 +704,7 @@ export default function Dashboard() {
                       >{t("Barchasi ")}<ArrowRight size={14} />
                       </button>
                     </div>
-                    <ClinicRows patients={patients} />
+                    <ClinicRows patients={scoped} />
                   </section>
                 </div>
                 <div className="right-column">
@@ -780,9 +779,9 @@ export default function Dashboard() {
               <div className="panel-heading">
                 <h2>{t("Tuman tibbiyot muassasalari")}</h2>
                 <span>
-                  {new Set(patients.map((p) => p.clinic)).size}{t(" ta muassasa ")}</span>
+                  {new Set(scoped.map((p) => p.clinic)).size}{t(" ta muassasa ")}</span>
               </div>
-              <ClinicRows patients={patients} />
+              <ClinicRows patients={scoped} />
             </section>
           )}
           {tab === "referrals" && (
@@ -790,17 +789,12 @@ export default function Dashboard() {
               <section className="panel">
                 <div className="panel-heading">
                   <div>
-                    <h2>Shifokor ko‘rigi kutilmoqda</h2>
-                    <p>
-                      Mas’ul shifokor natijalarni ko‘rib, yo‘llanmani
-                      tasdiqlaydi.
-                    </p>
+                    <h2>{t("Shifokor ko‘rigi kutilmoqda")}</h2>
+                    <p>{t("Mas’ul shifokor natijalarni ko‘rib, yo‘llanmani tasdiqlaydi.")}</p>
                   </div>
                 </div>
                 {!reviewQueue.length && (
-                  <p className="workflow-empty">
-                    Ko‘rik kutilayotgan yo‘llanma yo‘q.
-                  </p>
+                  <p className="workflow-empty">{t("Ko‘rik kutilayotgan yo‘llanma yo‘q.")}</p>
                 )}
                 {reviewQueue.map((p) => (
                   <button
@@ -814,10 +808,10 @@ export default function Dashboard() {
                     <div>
                       <strong>{p.name}</strong>
                       <p>
-                        {p.reason} · {doctorNames[p.doctor]}
+                        {t(p.reason)} · {t(doctorNames[p.doctor])}
                       </p>
                     </div>
-                    <span className="badge amber">Ko‘rik kutilmoqda</span>
+                    <span className="badge amber">{t("Ko‘rik kutilmoqda")}</span>
                     <ChevronRight size={18} />
                   </button>
                 ))}
@@ -825,11 +819,8 @@ export default function Dashboard() {
               <section className="panel">
                 <div className="panel-heading">
                   <div>
-                    <h2>Muassasa javobi kutilayotgan yo‘llanmalar</h2>
-                    <p>
-                      Bemor kartasida bo‘sh vaqtni tanlang yoki muassasa
-                      bildirgan vaqtni kiriting.
-                    </p>
+                    <h2>{t("Muassasa javobi kutilayotgan yo‘llanmalar")}</h2>
+                    <p>{t("Bemor kartasida bo‘sh vaqtni tanlang yoki muassasa bildirgan vaqtni kiriting.")}</p>
                   </div>
                 </div>
                 {!scoped.some(isAwaitingFacility) && (
@@ -867,13 +858,13 @@ export default function Dashboard() {
               <section className="panel availability-panel">
                 <div className="panel-heading">
                   <div>
-                    <h2>Shifokorning bo‘sh vaqtlari</h2>
-                    <p>Namunaviy jadval · Toshkent vaqti</p>
+                    <h2>{t("Shifokorning bo‘sh vaqtlari")}</h2>
+                    <p>{t("Namunaviy jadval · Toshkent vaqti")}</p>
                   </div>
                   {persona === "district" && (
                     <select
                       className="availability-doctor"
-                      aria-label="Jadval uchun shifokor"
+                      aria-label={t("Jadval uchun shifokor")}
                       value={availabilityDoctor}
                       onChange={(event) =>
                         setAvailabilityDoctor(event.target.value)
@@ -881,7 +872,7 @@ export default function Dashboard() {
                     >
                       {Object.entries(doctorById).map(([id, name]) => (
                         <option key={id} value={id}>
-                          {name}
+                          {t(name)}
                         </option>
                       ))}
                     </select>
@@ -890,18 +881,18 @@ export default function Dashboard() {
                 {offline || !availability.length ? (
                   <p className="workflow-empty">
                     {offline
-                      ? "Jadvalni ko‘rish uchun mahalliy API’ga ulaning."
-                      : "Namunaviy jadval mavjud emas."}
+                      ? t("Jadvalni ko‘rish uchun mahalliy API’ga ulaning.")
+                      : t("Namunaviy jadval mavjud emas.")}
                   </p>
                 ) : (
                   <div className="registry-table-scroll">
                     <table className="registry-table appointments-table">
                       <thead>
                         <tr>
-                          <th>Sana va vaqt</th>
-                          <th>Muassasa</th>
-                          <th>Holat</th>
-                          <th>Amal</th>
+                          <th>{t("Sana va vaqt")}</th>
+                          <th>{t("Muassasa")}</th>
+                          <th>{t("Holat")}</th>
+                          <th>{t("Amal")}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -915,12 +906,12 @@ export default function Dashboard() {
                                 {formatDate(slot.start)} –{" "}
                                 {formatTime(slot.end)}
                               </td>
-                              <td>{slot.facility}</td>
+                              <td>{t(slot.facility)}</td>
                               <td>
                                 <span
                                   className={`badge ${slot.available ? "green" : "amber"}`}
                                 >
-                                  {slot.available ? "Bo‘sh" : "Band"}
+                                  {slot.available ? t("Bo‘sh") : t("Band")}
                                 </span>
                               </td>
                               <td>
@@ -931,9 +922,7 @@ export default function Dashboard() {
                                       setBookingError("");
                                       setBooking({ slot });
                                     }}
-                                  >
-                                    Qabul belgilash
-                                  </button>
+                                  >{t("Qabul belgilash")}</button>
                                 )}
                               </td>
                             </tr>
@@ -948,23 +937,23 @@ export default function Dashboard() {
                   <div>
                     <h2>
                       {persona === "district"
-                        ? "Tuman qabullari"
-                        : `Qabullar · ${doctorNames[persona]}`}
+                        ? t("Tuman qabullari")
+                        : t("Qabullar · {doctor}", { doctor: t(doctorNames[persona]) })}
                     </h2>
-                    <p>Jadval qabul qiluvchi shifokor bo‘yicha ko‘rsatiladi.</p>
+                    <p>{t("Jadval qabul qiluvchi shifokor bo‘yicha ko‘rsatiladi.")}</p>
                   </div>
-                  <span>Toshkent vaqti</span>
+                  <span>{t("Toshkent vaqti")}</span>
                 </div>
                 <div className="registry-table-scroll">
                   <table className="registry-table appointments-table">
                     <thead>
                       <tr>
-                        <th>Bemor</th>
-                        <th>Qabul vaqti</th>
-                        <th>Qabul shifokori</th>
-                        <th>Muassasa</th>
-                        <th>Holat</th>
-                        <th>Amal</th>
+                        <th>{t("Bemor")}</th>
+                        <th>{t("Qabul vaqti")}</th>
+                        <th>{t("Qabul shifokori")}</th>
+                        <th>{t("Muassasa")}</th>
+                        <th>{t("Holat")}</th>
+                        <th>{t("Amal")}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -979,27 +968,27 @@ export default function Dashboard() {
                             </button>
                           </td>
                           <td>
-                            {a.start ? formatDate(a.start) : "Aniq vaqtsiz"}
+                            {a.start ? formatDate(a.start) : t("Aniq vaqtsiz")}
                           </td>
                           <td>
-                            {a.practitioner
+                            {t(a.practitioner
                               ? (doctorNames[a.practitioner] ?? a.practitioner)
-                              : "Ko‘rsatilmagan"}
+                              : t("Ko‘rsatilmagan"))}
                           </td>
-                          <td>{a.facility ?? "Ko‘rsatilmagan"}</td>
+                          <td>{t(a.facility ?? "Ko‘rsatilmagan")}</td>
                           <td>
                             <span
                               className={`badge ${p.statusCode === "NO_SHOW_ALERTED" ? "red" : p.statusCode === "ATTENDED" || a.status === "booked" ? "green" : "amber"}`}
                             >
                               {p.statusCode === "ATTENDED"
-                                ? "Keldi"
+                                ? t("Keldi")
                                 : p.statusCode === "NO_SHOW_ALERTED"
-                                  ? "Kelmadi"
+                                  ? t("Kelmadi")
                                   : a.status === "booked"
-                                    ? "Tasdiqlangan"
+                                    ? t("Tasdiqlangan")
                                     : a.status === "untimed"
-                                      ? "Kelishilgan"
-                                      : "Tasdiq kutilmoqda"}
+                                      ? t("Kelishilgan")
+                                      : t("Tasdiq kutilmoqda")}
                             </span>
                           </td>
                           <td>
@@ -1010,9 +999,7 @@ export default function Dashboard() {
                                 onClick={() =>
                                   save(() => recordAttendance(a.id))
                                 }
-                              >
-                                Kelganini qayd etish
-                              </button>
+                              >{t("Kelganini qayd etish")}</button>
                             )}
                           </td>
                         </tr>
@@ -1027,8 +1014,7 @@ export default function Dashboard() {
                   <button
                     className="text-button"
                     onClick={() => navigate("referrals")}
-                  >
-                    Yo‘llanmalar <ArrowRight size={14} />
+                  >{t("Yo‘llanmalar ")}<ArrowRight size={14} />
                   </button>
                 </div>
               </section>
@@ -1038,8 +1024,8 @@ export default function Dashboard() {
             <section className="panel large-panel">
               <div className="panel-heading">
                 <div>
-                  <h2>Bemor va oila bilan bog‘lanish</h2>
-                  <p>AI qo‘ng‘iroqlari va tizim qayd etgan holatlar</p>
+                  <h2>{t("Bemor va oila bilan bog‘lanish")}</h2>
+                  <p>{t("AI qo‘ng‘iroqlari va tizim qayd etgan holatlar")}</p>
                 </div>
               </div>
               <CallHistory entries={history} patients={scoped} onSelect={setSelected} />
@@ -1064,14 +1050,14 @@ export default function Dashboard() {
                         {c.patientName}
                       </button>
                       <p>
-                        {c.target}
+                        {t(c.target)}
                         {patient?.cohort === "NEONATAL" && patient.motherName
                           ? ` · ${patient.motherName}`
                           : ""}{" "}
-                        · {c.attempts} urinish · {formatDate(c.scheduledAt)}
+                        · {c.attempts}{t(" urinish · ")}{formatDate(c.scheduledAt)}
                       </p>
                       {c.appointmentStart && (
-                        <p>Qabul vaqti · {formatDate(c.appointmentStart)}</p>
+                        <p>{t("Qabul vaqti · ")}{formatDate(c.appointmentStart)}</p>
                       )}
                     </div>
                     <strong>{t(c.statusLabel)}</strong>
@@ -1113,23 +1099,24 @@ export default function Dashboard() {
                           RED: t("Qizil zona"),
                           YELLOW: t("Sariq zona"),
                           GREEN: t("Yashil zona"),
+                          REVIEW: t("Klinik baho kerak"),
                         }[zone]
                       }
                     </span>
                     <div className="bar-track">
                       <div
                         className={zone.toLowerCase()}
-                        style={{ width: `${(count / patients.length) * 100}%` }}
+                        style={{ width: `${scoped.length ? (count / scoped.length) * 100 : 0}%` }}
                       />
                     </div>
                     <strong>
                       {count}{t(" bemor ·")}{" "}
-                      {Math.round((count / patients.length) * 100)}%
+                      {scoped.length ? Math.round((count / scoped.length) * 100) : 0}%
                     </strong>
                   </div>
                 ))}
               </div>
-              <ClinicRows patients={patients} />
+              <ClinicRows patients={scoped} />
             </section>
           )}
           <footer className="main-footer">
@@ -1153,7 +1140,7 @@ export default function Dashboard() {
             </button>
           </div>
           {!alerts.length && !events.length && (
-            <p className="workflow-empty">Yangi bildirishnoma yo‘q.</p>
+            <p className="workflow-empty">{t("Yangi bildirishnoma yo‘q.")}</p>
           )}
           {alerts.map((patient) => (
             <button
@@ -1167,9 +1154,9 @@ export default function Dashboard() {
               <strong>{patient.name}</strong>
               <p>
                 {patient.zone === "RED"
-                  ? "Shoshilinch klinik ko‘rik"
-                  : "Yo‘llanmani ko‘rib chiqish"}{" "}
-                · {doctorNames[patient.doctor] ?? "Biriktirilmagan"}
+                  ? t("Shoshilinch klinik ko‘rik")
+                  : t("Yo‘llanmani ko‘rib chiqish")}{" "}
+                · {t(doctorNames[patient.doctor] ?? "Biriktirilmagan")}
               </p>
             </button>
           ))}
@@ -1270,19 +1257,14 @@ export default function Dashboard() {
                 <h2>{t("Jarayonni amalda ko‘ring.")}</h2>
                 <p className="drawer-intro">{t("Yangi kuzatuvdan mutaxassis qabuligacha — butun jarayon bitta ekranda. ")}</p>
                 <div className="demo-warning">
-                  <ShieldCheck size={18} />
-                  Sun’iy bemorlar. Haqiqiy tibbiy harakatlar bajarilmaydi.
-                </div>
+                  <ShieldCheck size={18} />{t("Sun’iy bemorlar. Haqiqiy tibbiy harakatlar bajarilmaydi.")}</div>
                 <button
                   className="button primary demo-stream-start"
                   disabled={offline || working || streamActive}
                   onClick={runStreamDemo}
                 >
-                  <Activity size={17} /> Ma’lumotlar oqimini boshlash
-                </button>
-                <p className="drawer-intro">
-                  Sinov IT-MED API · 4 ta namunaviy kuzatuv ketma-ket keladi.
-                </p>
+                  <Activity size={17} />{t(" Ma’lumotlar oqimini boshlash")}</button>
+                <p className="drawer-intro">{t("Sinov IT-MED API · 4 ta namunaviy kuzatuv ketma-ket keladi.")}</p>
                 {[
                   {
                     title: t("Onada yuqori xavf"),
@@ -1335,33 +1317,33 @@ export default function Dashboard() {
                       className={`badge ${selected.zone === "RED" ? "red" : selected.zone === "GREEN" ? "green" : selected.zone === "REVIEW" ? "zone-review" : "amber"}`}
                     >
                       {selected.zone === "RED"
-                        ? "Qizil zona"
+                        ? t("Qizil zona")
                         : selected.zone === "YELLOW"
-                          ? "Sariq zona"
+                          ? t("Sariq zona")
                           : selected.zone === "REVIEW"
-                            ? zoneLabels.REVIEW
-                            : "Yashil zona"}
+                          ? t(zoneLabels.REVIEW)
+                            : t("Yashil zona")}
                     </span>
                     {doctorNames[selected.doctor] && (
-                      <span>{doctorNames[selected.doctor]}</span>
+                      <span>{t(doctorNames[selected.doctor])}</span>
                     )}
-                    <span>{selected.status}</span>
+                    <span>{t(selected.status)}</span>
                   </div>
                   {selected.previousZone &&
                     selected.previousZone !== selected.zone && (
                       <div className="detail-block">
-                        <h3>Yangi kuzatuvda o‘zgarish aniqlandi</h3>
+                        <h3>{t("Yangi kuzatuvda o‘zgarish aniqlandi")}</h3>
                         <p>
-                          {zoneLabels[selected.previousZone]} →{" "}
-                          {zoneLabels[selected.zone]}
+                          {t(zoneLabels[selected.previousZone])} →{" "}
+                          {t(zoneLabels[selected.zone])}
                         </p>
                         {!!selected.previousVitals?.length && (
-                          <p>Avval: {selected.previousVitals.join(" · ")}</p>
+                          <p>{t("Avval: ")}{t(selected.previousVitals.join(" · "))}</p>
                         )}
                       </div>
                     )}
                   <div className="detail-block">
-                    <h3>Klinik ko‘rsatkichlar</h3>
+                    <h3>{t("Klinik ko‘rsatkichlar")}</h3>
                     {selected.assessedAt && (
                       <p className="sample-assessment">{t("Namuna bahosi ·")}{" "}
                         {t(selected.assessedBy
@@ -1406,8 +1388,8 @@ export default function Dashboard() {
                           <CheckCheck size={17} />
                         )}
                         {canBookUrgent
-                          ? "Qabul belgilash"
-                          : "Ko‘rib chiqilganini qayd etish"}
+                          ? t("Qabul belgilash")
+                          : t("Ko‘rib chiqilganini qayd etish")}
                       </button>
                       {isPending(selected) && (
                         <button
@@ -1489,34 +1471,30 @@ export default function Dashboard() {
                           setBooking({ patientId: selected.id });
                         }}
                       >
-                        <CalendarDays size={15} /> Qabul belgilash
-                      </button>
+                        <CalendarDays size={15} />{t(" Qabul belgilash")}</button>
                     </div>
                   )}
                   <div className="detail-block patient-contact">
                     <h3>
-                      <Phone size={16} /> AI qo‘ng‘irog‘i
-                    </h3>
-                    <p>
-                      Aloqa oluvchi:{" "}
-                      {latestCall?.target ??
+                      <Phone size={16} />{t(" AI qo‘ng‘irog‘i")}</h3>
+                    <p>{t("Aloqa oluvchi:")}{" "}
+                      {t(latestCall?.target ??
                         (selected.cohort === "NEONATAL"
-                          ? "Chaqaloqning onasi"
-                          : "Bemor")}
+                          ? t("Chaqaloqning onasi")
+                          : "Bemor"))}
                     </p>
                     {selected.cohort === "NEONATAL" && (
-                      <p>
-                        Onasi:{" "}
+                      <p>{t("Onasi:")}{" "}
                         <strong>
                           {selected.motherName ??
                             relatedPatients[0]?.name ??
-                            "Namuna vasiy"}
+                            t("Namuna vasiy")}
                         </strong>
                       </p>
                     )}
                     {latestCall && (
                       <p role="status">
-                        <strong>{latestCall.statusLabel}</strong>
+                        <strong>{t(latestCall.statusLabel)}</strong>
                       </p>
                     )}
                     <PhoneActions key={selected.id + (selected.contactPhone ?? "")} patient={selected} disabled={offline || working} save={save}
@@ -1557,10 +1535,7 @@ export default function Dashboard() {
                     {(selected.zone === "YELLOW" || canBookUrgent) &&
                       !selectedVisit &&
                       !latestCall && (
-                        <p>
-                          AI qabul sanasi va vaqtini avtomatik qo‘ng‘iroqda
-                          aytadi.
-                        </p>
+                        <p>{t("Sinov qo‘ng‘irog‘ida qabul sanasi va vaqti ko‘rsatiladi. Haqiqiy telefon raqami terilmaydi.")}</p>
                       )}
                   </div>
                   {isAwaitingFacility(selected) && (
@@ -1649,17 +1624,14 @@ function ObservationFeed({
   onStart: () => void;
   onOpen: (id: string) => void;
 }) {
+  const { t } = useLanguage();
   return (
     <section className="panel demo-feed" aria-labelledby="demo-feed-title">
       <div className="panel-heading">
         <div>
           <h2 id="demo-feed-title">
-            <Activity size={21} /> Sinov ma’lumotlari oqimi
-          </h2>
-          <p>
-            Kuzatuv keladi, avvalgi o‘lchovlar bilan solishtiriladi va AI
-            dalillarni ko‘rib chiqadi.
-          </p>
+            <Activity size={21} />{t(" Sinov ma’lumotlari oqimi")}</h2>
+          <p>{t("Kuzatuv keladi, avvalgi o‘lchovlar bilan solishtiriladi va AI dalillarni ko‘rib chiqadi.")}</p>
         </div>
         <button
           className="button primary demo-feed-start"
@@ -1668,28 +1640,28 @@ function ObservationFeed({
         >
           <Zap size={16} />{" "}
           {active
-            ? "Oqim davom etmoqda"
+            ? t("Oqim davom etmoqda")
             : stream
-              ? "Oqimni qayta boshlash"
-              : "Ma’lumotlar oqimini boshlash"}
+              ? t("Oqimni qayta boshlash")
+              : t("Ma’lumotlar oqimini boshlash")}
         </button>
       </div>
       {stream && (
         <div className="demo-feed-progress" role="status">
           <progress
-            aria-label="Kuzatuvlar soni"
+            aria-label={t("Kuzatuvlar soni")}
             value={stream.events.length}
             max={stream.total}
           />
           <span>
-            {stream.events.length}/{stream.total} kuzatuv ·{" "}
-            {active ? "Jarayon davom etmoqda" : "Yakunlandi"}
+            {stream.events.length}/{stream.total}{t(" kuzatuv ·")}{" "}
+            {active ? t("Jarayon davom etmoqda") : t("Yakunlandi")}
           </span>
         </div>
       )}
       {!stream?.events.length && (
         <p className="demo-feed-empty">
-          {stream ? "Birinchi kuzatuv kutilmoqda…" : "Hali kuzatuv kelmagan."}
+          {stream ? t("Birinchi kuzatuv kutilmoqda…") : t("Hali kuzatuv kelmagan.")}
         </p>
       )}
       <div className="demo-feed-events">
@@ -1701,16 +1673,16 @@ function ObservationFeed({
             const after = observationVitals(event.observation ?? {});
             const running = event.analysis_status === "RUNNING";
             const reviewLabel = running
-              ? "AI tahlil qilmoqda…"
+              ? t("AI tahlil qilmoqda…")
               : event.analysis_status === "PENDING"
-                ? "Tekshiruv navbatda"
+                ? t("Tekshiruv navbatda")
                 : event.analysis_source === "openrouter"
-                  ? "AI ko‘rib chiqdi"
+                  ? t("AI ko‘rib chiqdi")
                   : event.analysis_status === "SUPERSEDED"
-                    ? "Yangi kuzatuv bilan almashtirildi"
+                    ? t("Yangi kuzatuv bilan almashtirildi")
                     : event.analysis_unavailable
-                      ? "AI mavjud emas · qoida natijasi"
-                      : "Qoida bo‘yicha baholandi";
+                      ? t("AI mavjud emas · qoida natijasi")
+                      : t("Qoida bo‘yicha baholandi");
             return (
               <article className="demo-feed-row" key={event.id}>
                 <div className="demo-event-heading">
@@ -1725,18 +1697,18 @@ function ObservationFeed({
                   >
                     {event.previous_zone &&
                       event.previous_zone !== event.zone &&
-                      `${zoneLabels[event.previous_zone]} → `}
-                    {zoneLabels[event.zone]}
+                      `${t(zoneLabels[event.previous_zone])} → `}
+                    {t(zoneLabels[event.zone])}
                   </span>
                 </div>
                 {after.length > 0 && (
                   <dl className="demo-comparison">
                     <div>
-                      <dt>Avvalgi o‘lchovlar</dt>
-                      <dd>{before.join(" · ") || "Mavjud emas"}</dd>
+                      <dt>{t("Avvalgi o‘lchovlar")}</dt>
+                      <dd>{t(before.join(" · ") || "Mavjud emas")}</dd>
                     </div>
                     <div>
-                      <dt>Yangi o‘lchovlar</dt>
+                      <dt>{t("Yangi o‘lchovlar")}</dt>
                       <dd>
                         {after.map((value) => (
                           <span
@@ -1747,7 +1719,7 @@ function ObservationFeed({
                                 : "demo-measurement-changed"
                             }
                           >
-                            {value}
+                            {t(value)}
                           </span>
                         ))}
                       </dd>
@@ -1764,10 +1736,10 @@ function ObservationFeed({
                         aria-hidden="true"
                       />
                     )}
-                    {reviewLabel}
+                    {t(reviewLabel)}
                   </span>
                   {event.analysis_reason && (
-                    <span>{event.analysis_reason}</span>
+                    <span>{t(event.analysis_reason)}</span>
                   )}
                 </div>
               </article>
@@ -1956,6 +1928,7 @@ function CaseRationale({
   offline: boolean;
   analysis?: DemoAnalysis;
 }) {
+  const { t } = useLanguage();
   const [result, setResult] = useState<
     (RiskExplanation & { observationVersion?: string }) | null
   >(null);
@@ -2021,40 +1994,39 @@ function CaseRationale({
     (patient.riskEvidence?.length ? patient.riskEvidence : [patient.reason]);
   return (
     <div className="detail-block case-rationale">
-      <h3>Xavf belgisi sababi</h3>
+      <h3>{t("Xavf belgisi sababi")}</h3>
       <ul>
         {reasons.slice(0, 2).map((reason, index) => (
-          <li key={index}>{reason}</li>
+          <li key={index}>{t(reason)}</li>
         ))}
       </ul>
       {reasons.length > 2 && (
         <details>
-          <summary>Qolgan dalillar</summary>
+          <summary>{t("Qolgan dalillar")}</summary>
           <ul>
             {reasons.slice(2).map((reason, index) => (
-              <li key={index}>{reason}</li>
+              <li key={index}>{t(reason)}</li>
             ))}
           </ul>
         </details>
       )}
       <small>
         {patient.assessedAt
-          ? "Namuna mutaxassis bahosi"
+          ? t("Namuna mutaxassis bahosi")
           : current?.source === "openrouter"
-            ? `AI tahlilchi · ${current.model}`
-            : "Namuna qoidalari asosida"}
+            ? t("AI tahlilchi · {model}", { model: current.model ?? "" })
+            : t("Namuna qoidalari asosida")}
       </small>
       {current?.source === "openrouter" &&
         (current.review_focus === "VERIFY_CHANGE" ||
           current.review_focus === "MISSING_OBSERVATIONS") && (
-          <p className="sample-assessment">
-            Shifokor uchun:{" "}
+          <p className="sample-assessment">{t("Shifokor uchun:")}{" "}
             {
               {
                 VERIFY_CHANGE:
-                  "Avvalgi va yangi ko‘rsatkichlar o‘rtasidagi o‘zgarishni tekshiring.",
+                  t("Avvalgi va yangi ko‘rsatkichlar o‘rtasidagi o‘zgarishni tekshiring."),
                 MISSING_OBSERVATIONS:
-                  "Yetishmayotgan kuzatuv ma’lumotlarini tekshiring.",
+                  t("Yetishmayotgan kuzatuv ma’lumotlarini tekshiring."),
               }[current.review_focus]
             }
           </p>
@@ -2062,22 +2034,22 @@ function CaseRationale({
       {(analysis?.status === "PENDING" || analysis?.status === "RUNNING") && (
         <p className="sample-assessment" role="status">
           {analysis.status === "RUNNING"
-            ? "AI tahlilchi yangi kuzatuvni tekshirmoqda."
-            : "Kuzatuv tekshiruv navbatida."}
+            ? t("AI tahlilchi yangi kuzatuvni tekshirmoqda.")
+            : t("Kuzatuv tekshiruv navbatida.")}
         </p>
       )}
       {current?.analyzer_status && (
         <p className="sample-assessment" role="status">
           {current.analyzer_status === "not_configured"
-            ? "OpenRouter sozlanmagan. Qoida dalillari ko‘rsatilmoqda."
-            : "AI tahlili vaqtincha mavjud emas. Qoida dalillari ko‘rsatilmoqda."}
+            ? t("OpenRouter sozlanmagan. Qoida dalillari ko‘rsatilmoqda.")
+            : t("AI tahlili vaqtincha mavjud emas. Qoida dalillari ko‘rsatilmoqda.")}
         </p>
       )}
       {patient.analysisEligible === false && !patient.assessedAt && (
         <p className="sample-assessment">
           {patient.zone === "RED"
-            ? "AI tahlili xavf darajasi qizilga o‘zgarganda ishga tushadi."
-            : "AI tahlili uchun yangi o‘lchov o‘zgarishi yoki bir nechta klinik dalil kerak."}
+            ? t("AI tahlili xavf darajasi qizilga o‘zgarganda ishga tushadi.")
+            : t("AI tahlili uchun yangi o‘lchov o‘zgarishi yoki bir nechta klinik dalil kerak.")}
         </p>
       )}
       {!offline &&
@@ -2093,10 +2065,10 @@ function CaseRationale({
             onClick={load}
           >
             {loading
-              ? "Dalillar ko‘rib chiqilmoqda…"
+              ? t("Dalillar ko‘rib chiqilmoqda…")
               : current?.analyzer_status
-                ? "AI tahlilini qayta olish"
-                : "AI tahlilini olish"}
+                ? t("AI tahlilini qayta olish")
+                : t("AI tahlilini olish")}
           </button>
         )}
     </div>
@@ -2128,6 +2100,7 @@ function UrgentBookingDialog({
   onClose: () => void;
   onBook: (start: string) => void;
 }) {
+  const { t } = useLanguage();
   const dialog = useRef<HTMLDialogElement>(null);
   const [slotId, setSlotId] = useState("");
   const [customTime, setCustomTime] = useState(false);
@@ -2147,10 +2120,10 @@ function UrgentBookingDialog({
       }}
     >
       <div className="booking-heading">
-        <h2 id="urgent-booking-title">Shoshilinch qabul belgilash</h2>
+        <h2 id="urgent-booking-title">{t("Shoshilinch qabul belgilash")}</h2>
         <button
           className="icon-button"
-          aria-label="Yopish"
+          aria-label={t("Yopish")}
           disabled={working}
           onClick={onClose}
         >
@@ -2159,7 +2132,7 @@ function UrgentBookingDialog({
       </div>
       <p className="booking-slot">
         <strong>{patient.name}</strong>
-        <span>{doctorNames[patient.doctor]} · OVaBMU markazi</span>
+        <span>{t(doctorNames[patient.doctor])} · {t("OVaBMU markazi")}</span>
       </p>
       <form
         onSubmit={(event) => {
@@ -2187,29 +2160,21 @@ function UrgentBookingDialog({
             disabled={working}
             onClick={() => setCustomTime(!customTime)}
           >
-            {customTime ? "Bo‘sh vaqtlarga qaytish" : "Boshqa vaqt kiritish"}
+            {customTime ? t("Bo‘sh vaqtlarga qaytish") : t("Boshqa vaqt kiritish")}
           </button>
         )}
         {enterTime && (
           <div className="facility-time-fields">
-            <label className="booking-patient">
-              Qabul sanasi
-              <input name="date" type="date" required disabled={working} />
+            <label className="booking-patient">{t("Qabul sanasi")}<input name="date" type="date" required disabled={working} />
             </label>
-            <label className="booking-patient">
-              Vaqti (Toshkent)
-              <input name="time" type="time" required disabled={working} />
+            <label className="booking-patient">{t("Vaqti (Toshkent)")}<input name="time" type="time" required disabled={working} />
             </label>
           </div>
         )}
-        <p>
-          AI{" "}
-          {patient.cohort === "NEONATAL" ? "chaqaloqning onasiga" : "bemorga"}{" "}
-          sinov qo‘ng‘irog‘ida qabul sanasi va vaqtini aytadi.
-        </p>
+        <p>{t("Sinov qo‘ng‘irog‘ida qabul sanasi va vaqti ko‘rsatiladi. Haqiqiy telefon raqami terilmaydi.")}</p>
         {error && (
           <p className="booking-error" role="alert">
-            {error}
+            {t(error)}
           </p>
         )}
         <button
@@ -2218,8 +2183,8 @@ function UrgentBookingDialog({
           disabled={disabled || (!enterTime && !slot)}
         >
           {working
-            ? "Saqlanmoqda…"
-            : "Qabulni saqlash va AI qo‘ng‘irog‘ini boshlash"}
+            ? t("Saqlanmoqda…")
+            : t("Qabulni saqlash va AI qo‘ng‘irog‘ini boshlash")}
         </button>
       </form>
     </dialog>
@@ -2249,7 +2214,7 @@ function BookingDialog({
   onClose: () => void;
   onBook: (patient: Patient, slot: AvailabilitySlot) => void;
 }) {
-  const { date: formatDate } = useLanguage();
+  const { t, date: formatDate } = useLanguage();
   const dialog = useRef<HTMLDialogElement>(null);
   const [patientId, setPatientId] = useState(
     initialPatientId ?? (patients.length === 1 ? patients[0].id : ""),
@@ -2278,10 +2243,10 @@ function BookingDialog({
       }}
     >
       <div className="booking-heading">
-        <h2 id="booking-title">Qabul belgilash</h2>
+        <h2 id="booking-title">{t("Qabul belgilash")}</h2>
         <button
           className="icon-button"
-          aria-label="Yopish"
+          aria-label={t("Yopish")}
           disabled={working}
           onClick={onClose}
         >
@@ -2294,7 +2259,7 @@ function BookingDialog({
             {formatDate(initialSlot.start)} – {formatTime(initialSlot.end)}
           </strong>
           <span>
-            {doctorById[initialSlot.practitioner_id]} · {initialSlot.facility}
+            {t(doctorById[initialSlot.practitioner_id])} · {t(initialSlot.facility)}
           </span>
         </p>
       )}
@@ -2308,15 +2273,13 @@ function BookingDialog({
         {initialPatientId ? (
           <strong>{patient?.name}</strong>
         ) : (
-          <label className="booking-patient">
-            Bemor
-            <select
+          <label className="booking-patient">{t("Bemor")}<select
               required
               value={patientId}
               disabled={working || !patients.length}
               onChange={(event) => setPatientId(event.target.value)}
             >
-              <option value="">Bemorni tanlang</option>
+              <option value="">{t("Bemorni tanlang")}</option>
               {patients.map((entry) => (
                 <option key={entry.id} value={entry.id}>
                   {entry.name}
@@ -2326,13 +2289,13 @@ function BookingDialog({
           </label>
         )}
         {(!patients.length || (initialPatientId && !patient)) && (
-          <p>Qabul belgilash uchun yo‘llanma mavjud emas.</p>
+          <p>{t("Qabul belgilash uchun yo‘llanma mavjud emas.")}</p>
         )}
         {!initialSlot && (
           <>
             {displayedDoctor && displayedFacility && (
               <p className="booking-slot">
-                {doctorById[displayedDoctor]} · {displayedFacility}
+                {t(doctorById[displayedDoctor])} · {t(displayedFacility)}
               </p>
             )}
             {suggestedSlots.length > 0 && (
@@ -2347,22 +2310,20 @@ function BookingDialog({
               className="booking-more"
               open={suggestedSlots.length === 0 || undefined}
             >
-              <summary>Boshqa shifokor yoki vaqt</summary>
-              <label className="booking-patient">
-                Shifokor va qabul vaqti
-                <select
+              <summary>{t("Boshqa shifokor yoki vaqt")}</summary>
+              <label className="booking-patient">{t("Shifokor va qabul vaqti")}<select
                   value={slot?.id ?? ""}
                   disabled={working}
                   onChange={(event) => setSlotId(event.target.value)}
                 >
-                  <option value="">Bo‘sh vaqtni tanlang</option>
+                  <option value="">{t("Bo‘sh vaqtni tanlang")}</option>
                   {Object.entries(doctorById).map(([id, name]) => (
-                    <optgroup key={id} label={name}>
+                    <optgroup key={id} label={t(name)}>
                       {slots
                         .filter((entry) => entry.practitioner_id === id)
                         .map((entry) => (
                           <option key={entry.id} value={entry.id}>
-                            {formatDate(entry.start)} · {entry.facility}
+                            {formatDate(entry.start)} · {t(entry.facility)}
                           </option>
                         ))}
                     </optgroup>
@@ -2375,9 +2336,9 @@ function BookingDialog({
         {patient && (
           <>
             <div className="booking-review">
-              <strong>{patient.reason}</strong>
-              <span>{patient.vitals.join(" · ")}</span>
-              <span>Mas’ul shifokor · {doctorNames[patient.doctor]}</span>
+              <strong>{t(patient.reason)}</strong>
+              <span>{t(patient.vitals.join(" · "))}</span>
+              <span>{t("Mas’ul shifokor · ")}{t(doctorNames[patient.doctor])}</span>
             </div>
             <CaseRationale
               key={patient.id}
@@ -2385,20 +2346,15 @@ function BookingDialog({
               offline={unavailable}
               analysis={analyses?.[patient.id]}
             />
-            <p>
-              Qabul saqlangach, AI sinov qo‘ng‘irog‘i avtomatik navbatga
-              qo‘yiladi.
-            </p>
+            <p>{t("Qabul saqlangach, AI sinov qo‘ng‘irog‘i avtomatik navbatga qo‘yiladi.")}</p>
           </>
         )}
         {unavailable && (
-          <p role="status">
-            Bu vaqtni hozir saqlab bo‘lmaydi. Jadvalni tekshiring.
-          </p>
+          <p role="status">{t("Bu vaqtni hozir saqlab bo‘lmaydi. Jadvalni tekshiring.")}</p>
         )}
         {error && (
           <p className="booking-error" role="alert">
-            {error}
+            {t(error)}
           </p>
         )}
         <button
@@ -2407,10 +2363,10 @@ function BookingDialog({
           type="submit"
         >
           {working
-            ? "Saqlanmoqda…"
+            ? t("Saqlanmoqda…")
             : patient && !patient.referralApprovedAt
-              ? "Yo‘llanmani tasdiqlash va qabulni saqlash"
-              : "Qabulni saqlash"}
+              ? t("Yo‘llanmani tasdiqlash va qabulni saqlash")
+              : t("Qabulni saqlash")}
         </button>
       </form>
     </dialog>
@@ -2428,10 +2384,10 @@ function BookingTimes({
   disabled: boolean;
   onChange: (id: string) => void;
 }) {
-  const { date: formatDate } = useLanguage();
+  const { t, date: formatDate } = useLanguage();
   return (
     <fieldset className="booking-times" disabled={disabled}>
-      <legend>Eng yaqin bo‘sh vaqtlar (Toshkent)</legend>
+      <legend>{t("Eng yaqin bo‘sh vaqtlar (Toshkent)")}</legend>
       <div>
         {slots.slice(0, 3).map((slot) => (
           <button
@@ -2496,15 +2452,10 @@ function FacilityResponseForm({
           : t("Muassasa javobini qayd etish")}
       </h3>
       {offline && (
-        <p role="status">
-          Saqlash uchun mahalliy API’ga ulaning. Maydonlarni hozir ham
-          to‘ldirishingiz mumkin.
-        </p>
+        <p role="status">{t("Saqlash uchun mahalliy API’ga ulaning. Maydonlarni hozir ham to‘ldirishingiz mumkin.")}</p>
       )}
       <fieldset disabled={working}>
-        <label>
-          Tashrif turi
-          <select
+        <label>{t("Tashrif turi")}<select
             value={mode}
             onChange={(e) =>
               setMode(e.target.value as FacilityResponse["mode"])
@@ -2515,17 +2466,15 @@ function FacilityResponseForm({
           </select>
         </label>
         {mode === "timed" && slots.length > 0 && (
-          <label>
-            Namunaviy jadvaldan bo‘sh vaqt
-            <select
+          <label>{t("Namunaviy jadvaldan bo‘sh vaqt")}<select
               value={slot?.id ?? ""}
               onChange={(event) => setSlotId(event.target.value)}
             >
-              <option value="">Vaqtni qo‘lda kiriting</option>
+              <option value="">{t("Vaqtni qo‘lda kiriting")}</option>
               {slots.map((entry) => (
                 <option key={entry.id} value={entry.id}>
                   {formatDate(entry.start)} ·{" "}
-                  {doctorById[entry.practitioner_id]} · {entry.facility}
+                  {t(doctorById[entry.practitioner_id])} · {t(entry.facility)}
                 </option>
               ))}
             </select>
@@ -2533,34 +2482,26 @@ function FacilityResponseForm({
         )}
         {!slot && (
           <>
-            <label>
-              Qabul qiluvchi muassasa
-              <input name="facility" required maxLength={160} />
+            <label>{t("Qabul qiluvchi muassasa")}<input name="facility" required maxLength={160} />
             </label>
-            <label>
-              Qabul shifokori
-              <select
+            <label>{t("Qabul shifokori")}<select
                 name="practitioner"
                 required={mode === "timed"}
                 defaultValue=""
               >
-                <option value="">Shifokorni tanlang</option>
+                <option value="">{t("Shifokorni tanlang")}</option>
                 {Object.entries(doctorById).map(([id, name]) => (
                   <option key={id} value={id}>
-                    {name}
+                    {t(name)}
                   </option>
                 ))}
               </select>
             </label>
             {mode === "timed" && (
               <div className="facility-time-fields">
-                <label>
-                  Qabul sanasi
-                  <input name="date" type="date" required />
+                <label>{t("Qabul sanasi")}<input name="date" type="date" required />
                 </label>
-                <label>
-                  Qabul vaqti (Toshkent)
-                  <input name="time" type="time" required />
+                <label>{t("Qabul vaqti (Toshkent)")}<input name="time" type="time" required />
                 </label>
               </div>
             )}
@@ -2571,7 +2512,7 @@ function FacilityResponseForm({
           className="button primary"
           disabled={offline || working}
         >
-          {working ? "Saqlanmoqda…" : "Javobni saqlash"}
+          {working ? t("Saqlanmoqda…") : t("Javobni saqlash")}
         </button>
       </fieldset>
     </form>
@@ -2594,7 +2535,7 @@ function ClinicRows({ patients }: { patients: Patient[] }) {
               <small>{ps.length}{t(" bemor kuzatuvda")}</small>
             </div>
             <div className="clinic-bar">
-              {(["GREEN", "YELLOW", "RED"] as const).map((z) => (
+              {(["GREEN", "YELLOW", "RED", "REVIEW"] as const).map((z) => (
                 <span
                   key={z}
                   className={z.toLowerCase()}
@@ -2605,7 +2546,7 @@ function ClinicRows({ patients }: { patients: Patient[] }) {
               ))}
             </div>
             <div className="clinic-counts">
-              {(["RED", "YELLOW", "GREEN"] as const).map((z) => (
+              {(["RED", "YELLOW", "GREEN", "REVIEW"] as const).map((z) => (
                 <span key={z}>
                   <i className={z.toLowerCase()} />
                   {ps.filter((p) => p.zone === z).length}
@@ -2622,6 +2563,7 @@ function ClinicRows({ patients }: { patients: Patient[] }) {
           <i className="yellow" />{t("Sariq zona ")}</span>
         <span>
           <i className="green" />{t("Yashil zona ")}</span>
+        <span><i className="review" />{t("Klinik baho kerak")}</span>
       </div>
     </div>
   );
