@@ -53,3 +53,9 @@
 .registry-tabs{overflow-x:auto}.registry-tab{flex-shrink:0;white-space:nowrap}
 .stat-card.total .stat-bottom{flex-wrap:wrap}
 .sample-assessment{margin-top:7px}
+.case-notification{display:block;width:100%;text-align:left}
+.case-notification:hover{background:#f0f6ff}
+.appointments-table{min-width:720px}
+.appointments-table + .workflow-empty{margin-top:16px}
+.case-rationale ul{padding-left:18px;line-height:1.6;margin:0 0 8px}
+.case-rationale button{display:flex;margin-top:9px}

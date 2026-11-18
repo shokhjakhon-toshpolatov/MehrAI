@@ -15,6 +15,7 @@ from fastapi import FastAPI, HTTPException, Header, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from .risk import evaluate
+from .explanations import explain_case
 from .seed import PATIENTS, DOCTORS, POSTPARTUM_SAMPLE_ASSESSMENTS
 
 DB = os.getenv('DMED_DB', str(Path(__file__).with_name('demo.sqlite3')))
@@ -65,6 +66,16 @@ def init():
                         record['telecom'] = []
                         put(db, kind, record['id'], record, version + 1)
             retire_legacy_slots(db)
+            for case in all_of(db, 'Case'):
+                if (case['risk_zone'] == 'YELLOW' and case.get('referral_status') == 'AWAITING_FACILITY'
+                        and not case.get('referral_approved_at')):
+                    case.update(status='REFERRAL_REVIEW', referral_status='AWAITING_CLINICIAN')
+                    referral_id = case.get('service_request_id')
+                    if referral_id:
+                        referral, version = get(db, 'ServiceRequest', referral_id)
+                        referral['status'] = 'draft'
+                        put(db, 'ServiceRequest', referral_id, referral, version + 1)
+                    put(db, 'Case', case['id'], case)
         else:
             for doctor in DOCTORS:
                 put(db, 'PractitionerRole', doctor['id'], doctor)
@@ -146,18 +157,22 @@ def ingest(db, patient_id, observation):
         if doctor:
             case['assigned_practitioner_id'] = doctor['id']
             case['status'] = {
-                'RED': 'PENDING_DOCTOR_ACK', 'REVIEW': 'REVIEW_REQUIRED', 'YELLOW': 'REFERRED',
+                'RED': 'PENDING_DOCTOR_ACK', 'REVIEW': 'REVIEW_REQUIRED', 'YELLOW': 'REFERRAL_REVIEW',
             }[risk['risk_zone']]
             if risk['risk_zone'] == 'RED':
                 case['escalation_deadline'] = stamp(now() + timedelta(minutes=15))
             elif risk['risk_zone'] == 'YELLOW':
-                case['referral_status'] = 'AWAITING_FACILITY'
+                case['referral_status'] = 'AWAITING_CLINICIAN'
                 if preserve_visit:
-                    for key in ('appointment_id', 'appointment_time', 'appointment_etag', 'referral_status', 'status'):
+                    for key in ('appointment_id', 'appointment_time', 'appointment_etag', 'referral_status', 'referral_approved_at', 'referral_approved_by', 'status'):
                         if key in prior:
                             case[key] = prior[key]
             sid = f'referral-{patient_id}'
-            put(db,'ServiceRequest',sid,{'id':sid,'patient':patient_id,'practitioner':doctor['id'],'status':'active','specialty':specialty})
+            referral_state = 'draft' if case.get('referral_status') == 'AWAITING_CLINICIAN' else 'active'
+            put(db, 'ServiceRequest', sid, {
+                'id': sid, 'patient': patient_id, 'practitioner': doctor['id'],
+                'status': referral_state, 'specialty': specialty,
+            })
             case['service_request_id']=sid
         else: case['status']='UNASSIGNED_REVIEW'
     if patient['cohort_type'] == 'POSTPARTUM':
@@ -172,7 +187,7 @@ def ingest(db, patient_id, observation):
             case['follow_up_completed_at'] = prior['follow_up_completed_at']
     put(db,'Case',patient_id,case)
     db.execute('INSERT INTO idempotency VALUES(?,?)',(key,patient_id))
-    if risk['risk_zone'] == 'RED' or (preserve_visit and case['status'] == 'VISIT_PROPOSED'):
+    if preserve_visit and case.get('referral_approved_at') and case['status'] == 'VISIT_PROPOSED':
         queue_call(db, case, oid)
     return case
 
@@ -261,6 +276,45 @@ def simulate(scenario:str):
         obs.update({'systolic':165,'diastolic':110,'proteinuria':'++'} if pid=='p3' else {'bilirubin':295,'temperature':38.4})
         return ingest(db,pid,obs)
 
+@app.post('/api/cases/{case_id}/explanation')
+def case_explanation(case_id: str):
+    with connect() as db:
+        case, _ = get(db, 'Case', case_id)
+    return explain_case(case)
+
+class ReferralApproval(BaseModel):
+    practitioner_id: str
+
+@app.post('/api/referrals/{case_id}/approve')
+def approve_referral(case_id: str, approval: ReferralApproval):
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        case, _ = get(db, 'Case', case_id)
+        if case['risk_zone'] != 'YELLOW' or not case.get('service_request_id'):
+            raise HTTPException(409, 'Faqat rejali yo‘llanma tasdiqlanishi mumkin')
+        if approval.practitioner_id != case.get('assigned_practitioner_id'):
+            raise HTTPException(409, 'Yo‘llanmani mas’ul shifokor tasdiqlaydi')
+        if case.get('referral_approved_at'):
+            return case
+        referral, version = get(db, 'ServiceRequest', case['service_request_id'])
+        referral['status'] = 'active'
+        put(db, 'ServiceRequest', referral['id'], referral, version + 1)
+        case.update(referral_approved_at=stamp(), referral_approved_by=approval.practitioner_id)
+        if case['referral_status'] == 'AWAITING_CLINICIAN':
+            case.update(status='REFERRED', referral_status='AWAITING_FACILITY')
+        put(db, 'Case', case_id, case)
+        audit(db, case_id, 'referral_approved', 'Sample clinician approved referral', actor=approval.practitioner_id)
+        if case['status'] == 'VISIT_PROPOSED':
+            queue_call(db, case, str(uuid4()))
+        return case
+
+def require_planned_contact_approval(case):
+    if case['risk_zone'] == 'YELLOW' and (
+        not case.get('referral_approved_at') or not case.get('appointment_id')
+        or case.get('referral_status') == 'RESCHEDULE_REQUESTED'
+    ):
+        raise HTTPException(409, 'Avval yo‘llanmani tasdiqlang va muassasa tashrifini qayd eting')
+
 @app.post('/api/cases/{case_id}/{action}')
 def case_action(case_id:str,action:str):
     with connect() as db:
@@ -281,6 +335,7 @@ def case_action(case_id:str,action:str):
             audit(db, case_id, 'postpartum_follow_up', 'Staff recorded the postpartum follow-up')
             return case
         if action == 'call':
+            require_planned_contact_approval(case)
             for task in all_of(db, 'Call'):
                 if (task['case_id'] == case_id and task.get('case_version') == case['created_at']
                         and task.get('appointment_id') == case.get('appointment_id')
@@ -319,8 +374,8 @@ def record_facility_response(case_id: str, response: FacilityResponse):
     with connect() as db:
         db.execute('BEGIN IMMEDIATE')
         case, _ = get(db, 'Case', case_id)
-        if case['risk_zone'] != 'YELLOW' or not case.get('service_request_id'):
-            raise HTTPException(409, 'Bu holat rejali yo‘llanma uchun ochiq emas')
+        if case['risk_zone'] != 'YELLOW' or not case.get('referral_approved_at'):
+            raise HTTPException(409, 'Avval mas’ul shifokor yo‘llanmani tasdiqlashi kerak')
         if case.get('referral_status') not in ('AWAITING_FACILITY', 'RESCHEDULE_REQUESTED'):
             raise HTTPException(409, 'Muassasa javobi allaqachon qayd etilgan')
         if response.practitioner_id:
@@ -373,6 +428,7 @@ def record_attendance(visit_id: str):
         return case
 
 def apply_appointment_outcome(db, case, outcome):
+    require_planned_contact_approval(case)
     if case['risk_zone'] != 'YELLOW' or not case.get('appointment_id'):
         raise HTTPException(409, 'Bu holatda rejali qabul mavjud emas')
     visit, version = get(db, 'Appointment', case['appointment_id'])
@@ -407,6 +463,7 @@ def record_outreach(call_id: str, attempt: OutreachOutcome):
         key = f'outreach:{call_id}:{attempt.attempt_id}'
         if db.execute('SELECT 1 FROM idempotency WHERE key=?', (key,)).fetchone():
             return call
+        require_planned_contact_approval(case)
         if call['status'] not in ('READY', 'QUEUED', 'NO_ANSWER'):
             raise HTTPException(409, 'Aloqa vazifasi yakunlangan')
         if call.get('case_version') and call['case_version'] != case['created_at']:
@@ -434,6 +491,7 @@ def voice_event(event:VoiceEvent):
         case,_=get(db,'Case',event.case_id)
         key=f'voice:{event.event_id}'
         if db.execute('SELECT 1 FROM idempotency WHERE key=?',(key,)).fetchone(): return case
+        require_planned_contact_approval(case)
         if event.intent in ('CONFIRMED','RESCHEDULE_REQUESTED'):
             apply_appointment_outcome(db, case, event.intent)
         else:
@@ -470,6 +528,13 @@ def create_resource(kind:str,payload:dict,response:Response):
         if kind=='Observation':
             try: return ingest(db,payload['patient'].split('/')[-1],payload)
             except (KeyError,ValueError) as exc: raise HTTPException(422,str(exc))
+        if kind == 'Appointment':
+            patient_id = payload.get('patient', '')
+            if not isinstance(patient_id, str) or not patient_id:
+                raise HTTPException(422, 'Bemor identifikatori kerak')
+            case = db.execute("SELECT 1 FROM resources WHERE kind='Case' AND id=?", (patient_id.split('/')[-1],)).fetchone()
+            if case:
+                raise HTTPException(409, 'Boshqariladigan holat uchun muassasa javobi orqali qabulni yozing')
         rid=payload.get('id') or str(uuid4())
         if db.execute('SELECT 1 FROM resources WHERE kind=? AND id=?',(kind,rid)).fetchone(): raise HTTPException(409,'Resource exists')
         payload={**payload,'id':rid}

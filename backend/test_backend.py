@@ -16,6 +16,9 @@ class BackendTests(unittest.TestCase):
         self.tmp.cleanup()
     def facility_visit(self, case_id='p2', *, confirmed=False, mode='timed'):
         from datetime import timedelta
+        case = next(c for c in self.client.get('/api/registry').json()['cases'] if c['id'] == case_id)
+        approval = self.client.post(f'/api/referrals/{case_id}/approve', json={'practitioner_id': case['assigned_practitioner_id']})
+        self.assertEqual(approval.status_code, 200, approval.text)
         payload = {'mode': mode, 'facility': 'Namuna poliklinikasi', 'practitioner_id': 'd1', 'confirmed': confirmed}
         if mode == 'timed':
             payload['start'] = main.stamp(main.now() + timedelta(days=1))
@@ -78,7 +81,7 @@ class BackendTests(unittest.TestCase):
         main.init()
         refreshed = {c['id']: c for c in self.client.get('/api/registry').json()['cases']}
         self.assertEqual(refreshed['p5']['follow_up_completed_at'], complete['follow_up_completed_at'])
-        self.assertEqual(refreshed['p4']['referral_status'], 'AWAITING_FACILITY')
+        self.assertEqual(refreshed['p4']['referral_status'], 'AWAITING_CLINICIAN')
 
     def test_postpartum_sample_assessment_does_not_complete_follow_up(self):
         data = self.client.get('/api/registry').json()
@@ -92,12 +95,41 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(patients['p7']['mother_id'], 'p6')
         self.assertEqual(cases['p7']['status'], 'ROUTINE')
 
+    def test_referral_requires_assigned_clinician_and_facility_before_contact(self):
+        from datetime import timedelta
+        path = '/api/referrals/p2'
+        visit = {'mode':'timed', 'facility':'Namuna', 'practitioner_id':'d1',
+                 'start':main.stamp(main.now()+timedelta(days=1))}
+        self.assertEqual(self.client.post(path+'/response', json=visit).status_code, 409)
+        self.assertEqual(self.client.post('/api/cases/p2/call').status_code, 409)
+        self.assertEqual(self.client.post(path+'/approve', json={'practitioner_id':'d1'}).status_code, 409)
+        approved = self.client.post(path+'/approve', json={'practitioner_id':'d3'}).json()
+        self.assertEqual(approved['referral_status'], 'AWAITING_FACILITY')
+        self.assertEqual(self.client.post('/api/cases/p2/call').status_code, 409)
+        result = self.client.post(path+'/response', json=visit).json()
+        state = self.client.get('/api/registry').json()
+        self.assertEqual(result['practitioner'], 'd1')
+        self.assertEqual(next(c for c in state['cases'] if c['id']=='p2')['assigned_practitioner_id'], 'd3')
+        self.assertTrue(any(c.get('appointment_id') == result['id'] for c in state['calls']))
+        self.assertEqual(self.client.post('/api/referrals/p3/response', json=visit).status_code, 409)
+
+    def test_local_model_can_only_select_existing_evidence(self):
+        from unittest.mock import patch
+        from backend.explanations import explain_case
+        case = {'cohort_type': 'MATERNAL', 'risk_zone': 'RED', 'risk_reasons': ['First', 'Second']}
+        with patch.dict('os.environ', {'MEHRAI_OLLAMA_MODEL':'qwen3:8b'}), patch('backend.explanations.httpx.Client') as client:
+            provider = client.return_value.__enter__.return_value.post.return_value
+            provider.json.return_value = {'message': {'content': '{"indices":[0,1]}'}}
+            self.assertEqual(explain_case(case)['source'], 'local-model')
+            provider.json.return_value = {'message': {'content': '{"indices":[1,9]}'}}
+            self.assertEqual(explain_case(case), {'source':'rules','zone':'RED','reasons':['First','Second']})
+
     def test_seed_and_routing(self):
         data=self.client.get('/api/registry').json()
         cases={c['id']:c for c in data['cases']}
         self.assertEqual([cases[f'p{i}']['risk_zone'] for i in range(1,5)],['GREEN','YELLOW','RED','YELLOW'])
         self.assertEqual(cases['p2']['assigned_practitioner_id'],'d3')
-        self.assertEqual(cases['p2']['referral_status'],'AWAITING_FACILITY')
+        self.assertEqual(cases['p2']['referral_status'],'AWAITING_CLINICIAN')
         self.assertEqual(data['appointments'],[])
         self.assertEqual(cases['p4']['assigned_practitioner_id'],'d4')
     def test_red_escalates_but_accepted_does_not(self):
@@ -126,6 +158,7 @@ class BackendTests(unittest.TestCase):
         after=self.client.get('/api/registry').json()
         self.assertEqual(len(before['calls']),len(after['calls']))
     def test_voice_idempotency_and_fallback(self):
+        self.facility_visit()
         event={'case_id':'p2','intent':'NO_ANSWER','event_id':'first'}
         self.client.post('/webhooks/voicelab/status',json=event)
         r=self.client.post('/webhooks/voicelab/status',json=event).json()
@@ -212,7 +245,7 @@ class BackendTests(unittest.TestCase):
     def test_case_mutations_persist_and_audit(self):
         self.assertEqual(self.client.post('/api/cases/p3/busy').status_code,200)
         self.assertEqual(self.client.post('/api/cases/p3/accept').status_code,200)
-        self.assertEqual(self.client.post('/api/cases/p2/call').status_code,200)
+        self.assertEqual(self.client.post('/api/cases/p1/call').status_code,200)
         registry=self.client.get('/api/registry').json()
         case=next(c for c in registry['cases'] if c['id']=='p3')
         self.assertEqual(case['status'],'DOCTOR_ACCEPTED')
@@ -222,7 +255,7 @@ class BackendTests(unittest.TestCase):
         with main.connect() as db:
             self.assertEqual(main.get(db,'Case','p3')[0]['status'],'DOCTOR_ACCEPTED')
             self.assertEqual(len(main.all_of(db,'AuditEvent')),3)
-        call=next(c for c in registry['calls'] if c['case_id']=='p2')
+        call=next(c for c in registry['calls'] if c['case_id']=='p1')
         self.assertIn(call['status'],('QUEUED','READY'))
         self.assertEqual(call['attempts'],0)
         self.assertEqual(call['mode'],'simulation')

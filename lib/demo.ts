@@ -3,7 +3,7 @@ export type Patient = {
   id: string; name: string; age: number; cohort: 'MATERNAL' | 'NEONATAL' | 'POSTPARTUM';
   stage: string; clinic: string; zone: Zone; reason: string; vitals: string[];
   doctor: string; status: string; time: string;
-  statusCode?: string; deadline?: string; updatedAt?: string; appointmentAt?: string; referralStatus?: string;
+  statusCode?: string; deadline?: string; updatedAt?: string; appointmentAt?: string; referralStatus?: string; referralApprovedAt?: string;
   motherId?: string; followUpAt?: string; followUpCompletedAt?: string; assessedAt?: string; assessedBy?: string;
 };
 export type Doctor = { id: string; name: string; specialty: string; initials: string; role: string };
@@ -15,9 +15,9 @@ export const doctors: Doctor[] = [
 ];
 export const seedPatients: Patient[] = [
   { id: 'P-1003', name: 'Mohira Rustamova', age: 29, cohort: 'MATERNAL', stage: '34-hafta', clinic: '42-sonli OP', zone: 'RED', reason: 'Preeklampsiya xavfi', vitals: ['AQB 165/110', 'Proteinuriya ++'], doctor: 'rahimova', status: 'Tasdiq kutilmoqda', time: '—' },
-  { id: 'P-1004', motherId: 'P-1009', name: 'Amirbek Nazarov', age: 5, cohort: 'NEONATAL', stage: '5 kunlik', clinic: '15-sonli OP', zone: 'YELLOW', reason: 'Neonatal sariqlik', vitals: ['Bilirubin 238 µmol/L', 'Vazn −8.4%'], doctor: 'alimov', status: 'Muassasa javobi kutilmoqda', time: '—', referralStatus: 'AWAITING_FACILITY' },
-  { id: 'P-1002', name: 'Dilfuza Toshmatova', age: 26, cohort: 'MATERNAL', stage: '28-hafta', clinic: '15-sonli OP', zone: 'YELLOW', reason: 'Gestatsion diabet · anemiya', vitals: ['Glyukoza 5.8 mmol/L', 'Hb 94 g/L'], doctor: 'umarova', status: 'Muassasa javobi kutilmoqda', time: '—', referralStatus: 'AWAITING_FACILITY' },
-  { id: 'P-1005', name: 'Shahnoza Abdullayeva', age: 31, cohort: 'MATERNAL', stage: '30-hafta', clinic: '42-sonli OP', zone: 'YELLOW', reason: 'O‘rtacha anemiya', vitals: ['Hb 98 g/L', 'AQB 120/80'], doctor: 'rahimova', status: 'Muassasa javobi kutilmoqda', time: '—', referralStatus: 'AWAITING_FACILITY' },
+  { id: 'P-1004', motherId: 'P-1009', name: 'Amirbek Nazarov', age: 5, cohort: 'NEONATAL', stage: '5 kunlik', clinic: '15-sonli OP', zone: 'YELLOW', reason: 'Neonatal sariqlik', vitals: ['Bilirubin 238 µmol/L', 'Vazn −8.4%'], doctor: 'alimov', status: 'Shifokor ko‘rigi kutilmoqda', time: '—', referralStatus: 'AWAITING_CLINICIAN' },
+  { id: 'P-1002', name: 'Dilfuza Toshmatova', age: 26, cohort: 'MATERNAL', stage: '28-hafta', clinic: '15-sonli OP', zone: 'YELLOW', reason: 'Gestatsion diabet · anemiya', vitals: ['Glyukoza 5.8 mmol/L', 'Hb 94 g/L'], doctor: 'umarova', status: 'Shifokor ko‘rigi kutilmoqda', time: '—', referralStatus: 'AWAITING_CLINICIAN' },
+  { id: 'P-1005', name: 'Shahnoza Abdullayeva', age: 31, cohort: 'MATERNAL', stage: '30-hafta', clinic: '42-sonli OP', zone: 'YELLOW', reason: 'O‘rtacha anemiya', vitals: ['Hb 98 g/L', 'AQB 120/80'], doctor: 'rahimova', status: 'Shifokor ko‘rigi kutilmoqda', time: '—', referralStatus: 'AWAITING_CLINICIAN' },
   { id: 'P-1001', name: 'Madina Karimova', age: 24, cohort: 'MATERNAL', stage: '24-hafta', clinic: '42-sonli OP', zone: 'GREEN', reason: 'Ko‘rsatkichlar me’yorda', vitals: ['AQB 115/75', 'Hb 118 g/L'], doctor: 'rahimova', status: 'Rejali kuzatuv', time: '20-noyabr' },
   { id: 'P-1006', motherId: 'P-1010', name: 'Soliha Usmonova', age: 12, cohort: 'NEONATAL', stage: '12 kunlik', clinic: 'OVaBMU markazi', zone: 'GREEN', reason: 'Rivojlanishi me’yorda', vitals: ['Harorat 36.7 °C', 'SpO₂ 98%'], doctor: 'alimov', status: 'Patronaj nazorati', time: '19-noyabr' },
   { id: 'P-1007', name: 'Zarina Ergasheva', age: 27, cohort: 'MATERNAL', stage: '18-hafta', clinic: 'OVaBMU markazi', zone: 'GREEN', reason: 'Ko‘rsatkichlar me’yorda', vitals: ['AQB 110/70', 'Hb 121 g/L'], doctor: 'karimov', status: 'Rejali kuzatuv', time: '21-noyabr' },

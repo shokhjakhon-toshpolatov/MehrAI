@@ -31,6 +31,9 @@ import {
   loadRegistry,
   performCaseAction,
   recordOutcome,
+  approveReferral,
+  explainRisk,
+  type RiskExplanation,
   recordFacilityResponse,
   recordAttendance,
   type FacilityResponse,
@@ -53,6 +56,12 @@ const doctorNames: Record<string, string> = {
   karimov: "Dr. Jamshid Karimov",
   umarova: "Dr. Malika Umarova",
   alimov: "Dr. Sardor Alimov",
+};
+const practitionerIds: Record<string, string> = {
+  rahimova: "d1",
+  karimov: "d2",
+  umarova: "d3",
+  alimov: "d4",
 };
 export default function Dashboard() {
   const [patients, setPatients] = useState<Patient[]>(seedPatients);
@@ -137,10 +146,20 @@ export default function Dashboard() {
   const emergency = scoped.filter(
     (p) => p.zone === "RED" && p.statusCode !== "DOCTOR_ACCEPTED",
   );
+  const reviewQueue = scoped.filter(
+    (p) => p.referralStatus === "AWAITING_CLINICIAN",
+  );
+  const alerts = [...emergency, ...reviewQueue];
+  const needsApproval =
+    selected?.zone === "YELLOW" && !selected.referralApprovedAt;
   const visits = (data?.appointments ?? [])
-    .filter((visit) => ["proposed", "booked", "untimed"].includes(visit.status))
+    .filter(
+      (visit) =>
+        ["proposed", "booked", "untimed"].includes(visit.status) &&
+        (persona === "district" || visit.practitioner === persona),
+    )
     .flatMap((visit) => {
-      const patient = scoped.find((p) => p.id === visit.patient);
+      const patient = patients.find((p) => p.id === visit.patient);
       return patient ? [{ visit, patient }] : [];
     })
     .sort((a, b) => (a.visit.start ?? "").localeCompare(b.visit.start ?? ""));
@@ -149,6 +168,9 @@ export default function Dashboard() {
       visit.patient === selected?.id &&
       ["proposed", "booked", "untimed"].includes(visit.status),
   );
+  const canContact =
+    selected?.zone !== "YELLOW" ||
+    Boolean(selected?.referralApprovedAt && selectedVisit);
   const relatedPatients =
     selected?.cohort === "POSTPARTUM"
       ? patients.filter((p) => p.motherId === selected.id)
@@ -178,6 +200,7 @@ export default function Dashboard() {
         ": " +
         ({
           accept: "Holat qabul qilindi",
+          referral_approved: "Yo‘llanma tasdiqlandi",
           busy: "Holat o‘tkazildi",
           outreach: "Aloqa natijasi qayd etildi",
           call: "Aloqa vazifasi yaratildi",
@@ -235,8 +258,9 @@ export default function Dashboard() {
             {
               id: "appointments",
               icon: CalendarDays,
-              label: "Yo‘llanmalar va qabullar",
+              label: "Qabullar",
             },
+            { id: "referrals", icon: Stethoscope, label: "Yo‘llanmalar" },
             { id: "voice", icon: Phone, label: "Bemorlar bilan aloqa" },
             { id: "clinics", icon: Building2, label: "Poliklinikalar" },
             { id: "analytics", icon: Activity, label: "Tahlil va hisobotlar" },
@@ -309,7 +333,7 @@ export default function Dashboard() {
               onClick={() => setNotifications(!notifications)}
             >
               <Bell size={19} />
-              <i />
+              {alerts.length > 0 && <i />}
             </button>
             <span className="top-divider" />
             <span className="user-avatar">NA</span>
@@ -331,7 +355,8 @@ export default function Dashboard() {
                   : (
                       {
                         registry: "Perinatal registr",
-                        appointments: "Yo‘llanmalar va qabullar",
+                        appointments: "Qabullar jadvali",
+                        referrals: "Klinik ko‘rik va yo‘llanmalar",
                         voice: "Bemorlar bilan aloqa",
                         clinics: "Poliklinikalar",
                         analytics: "Tahlil va hisobotlar",
@@ -632,13 +657,50 @@ export default function Dashboard() {
               <ClinicRows patients={patients} />
             </section>
           )}
-          {tab === "appointments" && (
+          {tab === "referrals" && (
             <div className="left-column">
               <section className="panel">
                 <div className="panel-heading">
                   <div>
+                    <h2>Shifokor ko‘rigi kutilmoqda</h2>
+                    <p>
+                      Mas’ul shifokor natijalarni ko‘rib, yo‘llanmani
+                      tasdiqlaydi.
+                    </p>
+                  </div>
+                </div>
+                {!reviewQueue.length && (
+                  <p className="workflow-empty">
+                    Ko‘rik kutilayotgan yo‘llanma yo‘q.
+                  </p>
+                )}
+                {reviewQueue.map((p) => (
+                  <button
+                    className="appointment-row"
+                    key={p.id}
+                    onClick={() => setSelected(p)}
+                  >
+                    <span className="appointment-icon">
+                      <Stethoscope size={20} />
+                    </span>
+                    <div>
+                      <strong>{p.name}</strong>
+                      <p>
+                        {p.reason} · {doctorNames[p.doctor]}
+                      </p>
+                    </div>
+                    <span className="badge amber">Ko‘rik kutilmoqda</span>
+                    <ChevronRight size={18} />
+                  </button>
+                ))}
+              </section>
+              <section className="panel">
+                <div className="panel-heading">
+                  <div>
                     <h2>Muassasa javobi kutilayotgan yo‘llanmalar</h2>
-                    <p>Qabul vaqtini muassasa bildirganidan keyin kiriting.</p>
+                    <p>
+                      Muassasa bildirgan qabul vaqtini bemor kartasiga kiriting.
+                    </p>
                   </div>
                 </div>
                 {!scoped.some(isAwaitingFacility) && (
@@ -653,14 +715,12 @@ export default function Dashboard() {
                     onClick={() => setSelected(p)}
                   >
                     <span className="appointment-icon">
-                      <Stethoscope size={20} />
+                      <CalendarDays size={20} />
                     </span>
                     <div>
                       <strong>{p.name}</strong>
                       <p>
-                        Mas’ul shifokor:{" "}
-                        {doctorNames[p.doctor] || "Biriktirilmagan"} ·{" "}
-                        {p.clinic}
+                        {doctorNames[p.doctor]} · {p.clinic}
                       </p>
                     </div>
                     <span className="badge amber">
@@ -672,53 +732,96 @@ export default function Dashboard() {
                   </button>
                 ))}
               </section>
-              <section className="panel">
-                <div className="panel-heading">
-                  <h2>Muassasa bilan kelishilgan tashriflar</h2>
-                  <span>Toshkent vaqti</span>
-                </div>
-                {!visits.length && (
-                  <p className="workflow-empty">Kelishilgan tashriflar yo‘q.</p>
-                )}
-                {visits.map(({ visit: a, patient: p }) => (
-                  <button
-                    className="appointment-row"
-                    key={a.id}
-                    onClick={() => setSelected(p)}
-                  >
-                    <span className="appointment-icon">
-                      <CalendarDays size={22} />
-                    </span>
-                    <div>
-                      <strong>{p.name}</strong>
-                      <p>
-                        {a.practitioner
-                          ? (doctorNames[a.practitioner] ?? a.practitioner)
-                          : "Qabul shifokori ko‘rsatilmagan"}{" "}
-                        · {a.facility ?? "Muassasa ko‘rsatilmagan"}
-                      </p>
-                    </div>
-                    <span>
-                      {a.start ? formatDate(a.start) : "Aniq vaqtsiz"}
-                    </span>
-                    <span
-                      className={`badge ${p.statusCode === "NO_SHOW_ALERTED" ? "red" : p.statusCode === "ATTENDED" || a.status === "booked" ? "green" : "amber"}`}
-                    >
-                      {p.statusCode === "ATTENDED"
-                        ? "Keldi"
-                        : p.statusCode === "NO_SHOW_ALERTED"
-                          ? "Kelmadi"
-                          : a.status === "booked"
-                            ? "Tasdiqlangan"
-                            : a.status === "untimed"
-                              ? "Kelishilgan"
-                              : "Tasdiq kutilmoqda"}
-                    </span>
-                    <ChevronRight size={18} />
-                  </button>
-                ))}
-              </section>
             </div>
+          )}
+          {tab === "appointments" && (
+            <section className="panel">
+              <div className="panel-heading">
+                <div>
+                  <h2>
+                    {persona === "district"
+                      ? "Tuman qabullari"
+                      : `Qabullar · ${doctorNames[persona]}`}
+                  </h2>
+                  <p>Jadval qabul qiluvchi shifokor bo‘yicha ko‘rsatiladi.</p>
+                </div>
+                <span>Toshkent vaqti</span>
+              </div>
+              <div className="registry-table-scroll">
+                <table className="registry-table appointments-table">
+                  <thead>
+                    <tr>
+                      <th>Bemor</th>
+                      <th>Qabul vaqti</th>
+                      <th>Qabul shifokori</th>
+                      <th>Muassasa</th>
+                      <th>Holat</th>
+                      <th>Amal</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visits.map(({ visit: a, patient: p }) => (
+                      <tr key={a.id}>
+                        <td>
+                          <button
+                            className="patient-name"
+                            onClick={() => setSelected(p)}
+                          >
+                            {p.name}
+                          </button>
+                        </td>
+                        <td>
+                          {a.start ? formatDate(a.start) : "Aniq vaqtsiz"}
+                        </td>
+                        <td>
+                          {a.practitioner
+                            ? (doctorNames[a.practitioner] ?? a.practitioner)
+                            : "Ko‘rsatilmagan"}
+                        </td>
+                        <td>{a.facility ?? "Ko‘rsatilmagan"}</td>
+                        <td>
+                          <span
+                            className={`badge ${p.statusCode === "NO_SHOW_ALERTED" ? "red" : p.statusCode === "ATTENDED" || a.status === "booked" ? "green" : "amber"}`}
+                          >
+                            {p.statusCode === "ATTENDED"
+                              ? "Keldi"
+                              : p.statusCode === "NO_SHOW_ALERTED"
+                                ? "Kelmadi"
+                                : a.status === "booked"
+                                  ? "Tasdiqlangan"
+                                  : a.status === "untimed"
+                                    ? "Kelishilgan"
+                                    : "Tasdiq kutilmoqda"}
+                          </span>
+                        </td>
+                        <td>
+                          {p.statusCode !== "ATTENDED" && (
+                            <button
+                              className="button"
+                              disabled={offline || working}
+                              onClick={() => save(() => recordAttendance(a.id))}
+                            >
+                              Kelganini qayd etish
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {!visits.length && (
+                <p className="workflow-empty">Kelishilgan tashriflar yo‘q.</p>
+              )}
+              <div className="workflow-footer">
+                <button
+                  className="text-button"
+                  onClick={() => setTab("referrals")}
+                >
+                  Yo‘llanmalar <ArrowRight size={14} />
+                </button>
+              </div>
+            </section>
           )}
           {tab === "voice" && (
             <section className="panel large-panel">
@@ -831,6 +934,27 @@ export default function Dashboard() {
               <X size={18} />
             </button>
           </div>
+          {!alerts.length && !events.length && (
+            <p className="workflow-empty">Yangi bildirishnoma yo‘q.</p>
+          )}
+          {alerts.map((patient) => (
+            <button
+              key={patient.id}
+              className="notification-item case-notification"
+              onClick={() => {
+                setNotifications(false);
+                setSelected(patient);
+              }}
+            >
+              <strong>{patient.name}</strong>
+              <p>
+                {patient.zone === "RED"
+                  ? "Shoshilinch klinik ko‘rik"
+                  : "Yo‘llanmani ko‘rib chiqish"}{" "}
+                · {doctorNames[patient.doctor] ?? "Biriktirilmagan"}
+              </p>
+            </button>
+          ))}
           {events.map((e, i) => (
             <div className="notification-item" key={i}>
               <strong>{e.text}</strong>
@@ -1018,6 +1142,11 @@ export default function Dashboard() {
                       )}
                     </div>
                   )}
+                  <CaseRationale
+                    key={selected.id}
+                    patient={selected}
+                    offline={offline}
+                  />
                   {relatedPatients.length > 0 && (
                     <div className="detail-block">
                       <h3>
@@ -1070,6 +1199,39 @@ export default function Dashboard() {
                       )}
                     </div>
                   )}
+                  {needsApproval && (
+                    <div className="detail-block">
+                      <h3>Klinik ko‘rik va yo‘llanma</h3>
+                      <p>
+                        Mas’ul shifokor natijalarni ko‘rib chiqqach, yo‘llanmani
+                        tasdiqlaydi.
+                      </p>
+                      {persona !== selected.doctor ? (
+                        <button
+                          className="button"
+                          disabled={!selected.doctor}
+                          onClick={() => setPersona(selected.doctor)}
+                        >
+                          Mas’ul shifokor ko‘rinishiga o‘tish
+                        </button>
+                      ) : (
+                        <button
+                          className="button primary"
+                          disabled={offline || working}
+                          onClick={() =>
+                            save(() =>
+                              approveReferral(
+                                selected.id,
+                                practitionerIds[selected.doctor],
+                              ),
+                            )
+                          }
+                        >
+                          <Check size={15} /> Yo‘llanmani tasdiqlash
+                        </button>
+                      )}
+                    </div>
+                  )}
                   <div className="detail-block patient-contact">
                     <h3>
                       <Phone size={16} /> Bemor bilan bog‘lanish
@@ -1086,7 +1248,12 @@ export default function Dashboard() {
                     {selectedTasks.length > 0 && (
                       <p>So‘nggi natija: {selectedTasks.at(-1)?.statusLabel}</p>
                     )}
-                    {activeContact ? (
+                    {!canContact ? (
+                      <p>
+                        Mas’ul shifokor tasdig‘i va muassasa belgilagan tashrif
+                        kutilmoqda.
+                      </p>
+                    ) : activeContact ? (
                       <ContactOutcomeForm
                         key={activeContact.id}
                         task={activeContact}
@@ -1191,6 +1358,65 @@ export default function Dashboard() {
     </div>
   );
 }
+function CaseRationale({
+  patient,
+  offline,
+}: {
+  patient: Patient;
+  offline: boolean;
+}) {
+  const [result, setResult] = useState<
+    (RiskExplanation & { updatedAt?: string }) | null
+  >(null);
+  const [loading, setLoading] = useState(false);
+  const current =
+    result?.zone === patient.zone && result.updatedAt === patient.updatedAt
+      ? result
+      : null;
+  async function load() {
+    setLoading(true);
+    try {
+      setResult({
+        ...(await explainRisk(patient.id)),
+        updatedAt: patient.updatedAt,
+      });
+    } catch {
+      setResult({
+        source: "rules",
+        zone: patient.zone,
+        reasons: [patient.reason],
+        updatedAt: patient.updatedAt,
+      });
+    } finally {
+      setLoading(false);
+    }
+  }
+  return (
+    <div className="detail-block case-rationale">
+      <h3>Xavf belgisi sababi</h3>
+      <ul>
+        {(current?.reasons ?? [patient.reason]).map((reason, index) => (
+          <li key={index}>{reason}</li>
+        ))}
+      </ul>
+      <small>
+        {patient.assessedAt
+          ? "Namuna mutaxassis bahosi"
+          : current?.source === "local-model"
+            ? `Dalillarni mahalliy AI tartibladi · ${current.model}`
+            : "Namuna qoidalari asosida"}
+      </small>
+      {!offline && !patient.assessedAt && (
+        <button className="button" disabled={loading} onClick={load}>
+          {loading
+            ? "Dalillar ko‘rib chiqilmoqda…"
+            : "AI yordamida dalillarni tartiblash"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function scheduledVisit(
   visits: RegistryResult["appointments"] | undefined,
   id: string,
@@ -1268,9 +1494,10 @@ function ContactOutcomeForm({
 }
 
 function isAwaitingFacility(patient: Patient) {
-  return (
-    patient.referralStatus === "AWAITING_FACILITY" ||
-    patient.referralStatus === "RESCHEDULE_REQUESTED"
+  return Boolean(
+    patient.referralApprovedAt &&
+    (patient.referralStatus === "AWAITING_FACILITY" ||
+      patient.referralStatus === "RESCHEDULE_REQUESTED"),
   );
 }
 

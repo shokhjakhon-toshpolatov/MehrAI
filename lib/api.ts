@@ -64,6 +64,7 @@ type ApiCase = {
   created_at?: string;
   appointment_time?: string | null;
   referral_status?: string;
+  referral_approved_at?: string;
   follow_up_at?: string;
   follow_up_completed_at?: string;
   assessment_at?: string;
@@ -101,7 +102,8 @@ const statuses: Record<string, string> = {
   PENDING_DOCTOR_ACK: "Shifokor tasdig‘i kutilmoqda",
   ESCALATED: "Eskalatsiya qilindi",
   DOCTOR_ACCEPTED: "Shifokor qabul qildi",
-  REFERRED: "Yo‘llanma berildi",
+  REFERRED: "Yo‘llanma tasdiqlandi",
+  REFERRAL_REVIEW: "Shifokor ko‘rigi kutilmoqda",
   VISIT_PROPOSED: "Qabul vaqti taklif qilindi",
   VISIT_UNTIMED: "Vaqtsiz tashrif kelishildi",
   PATIENT_CONFIRMED: "Bemor qabulni tasdiqladi",
@@ -150,10 +152,11 @@ async function request<T>(
   path: string,
   method = "GET",
   payload?: object,
+  timeoutMs = 12_000,
 ): Promise<T> {
   const base = apiBase();
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 12_000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(`${base}${path}`, {
       method,
@@ -265,6 +268,7 @@ export async function loadRegistry(): Promise<RegistryResult> {
       updatedAt: c.updated_at ?? c.created_at,
       appointmentAt: c.appointment_time ?? undefined,
       referralStatus: c.referral_status,
+      referralApprovedAt: c.referral_approved_at,
       time: displayDate(
         c.follow_up_completed_at ??
           c.follow_up_at ??
@@ -347,4 +351,27 @@ export function recordFacilityResponse(
 }
 export function recordAttendance(visitId: string) {
   return request(`/api/visits/${encodeURIComponent(visitId)}/attended`, "POST");
+}
+
+export function approveReferral(caseId: string, practitionerId: string) {
+  return request(
+    `/api/referrals/${encodeURIComponent(caseId)}/approve`,
+    "POST",
+    { practitioner_id: practitionerId },
+  );
+}
+
+export type RiskExplanation = {
+  source: "rules" | "local-model";
+  zone: Patient["zone"];
+  reasons: string[];
+  model?: string;
+};
+export function explainRisk(caseId: string) {
+  return request<RiskExplanation>(
+    `/api/cases/${encodeURIComponent(caseId)}/explanation`,
+    "POST",
+    undefined,
+    20_000,
+  );
 }
