@@ -77,6 +77,14 @@ def init():
                         referral['status'] = 'draft'
                         put(db, 'ServiceRequest', referral_id, referral, version + 1)
                     put(db, 'Case', case['id'], case)
+            cases = {case['id']: case for case in all_of(db, 'Case')}
+            for call in all_of(db, 'Call'):
+                case = cases.get(call['case_id'])
+                if (case and call['status'] in ('READY', 'QUEUED') and not call['attempts']
+                        and case['status'] == 'VISIT_PROPOSED' and case.get('referral_approved_at')
+                        and call.get('case_version') == case['created_at']
+                        and call.get('appointment_id') == case['appointment_id']):
+                    schedule_demo_call(db, call)
         else:
             for doctor in DOCTORS:
                 put(db, 'PractitionerRole', doctor['id'], doctor)
@@ -192,7 +200,10 @@ def ingest(db, patient_id, observation):
     put(db,'Case',patient_id,case)
     db.execute('INSERT INTO idempotency VALUES(?,?)',(key,patient_id))
     if preserve_visit and case.get('referral_approved_at') and case['status'] == 'VISIT_PROPOSED':
-        queue_call(db, case, oid)
+        prior_calls = all_of(db, 'Call')
+        if not any(task.get('appointment_id') == case['appointment_id']
+                   and task['status'] == 'DEMO_CALL_COMPLETE' for task in prior_calls):
+            schedule_demo_call(db, queue_call(db, case, oid))
     return case
 
 def queue_call(db,case,observation_id='manual'):
@@ -207,6 +218,13 @@ def queue_call(db,case,observation_id='manual'):
     call={'id':cid,'case_id':case['id'],'mode':'simulation','status':'QUEUED' if due>local else 'READY','scheduled_at':stamp(due), 'target_role':'RELATED_PERSON' if case['risk_zone']=='RED' else 'MOTHER_OF_NEWBORN' if case['cohort_type']=='NEONATAL' else 'PATIENT','attempts':0,'case_version':case['created_at'],'appointment_id':case.get('appointment_id')}
     put(db,'Call',cid,call)
     return call
+
+
+def schedule_demo_call(db, call):
+    call.update(status='DEMO_CALL_QUEUED', next_transition_at=stamp(
+        max(datetime.fromisoformat(call['scheduled_at']), now() + timedelta(seconds=1))
+    ))
+    put(db, 'Call', call['id'], call)
 
 def escalate(db,case):
     if case['status']!='PENDING_DOCTOR_ACK': return case
@@ -309,12 +327,21 @@ def process_due(db):
             if datetime.fromisoformat(call['next_transition_at']) > now():
                 continue
             case, _ = get(db, 'Case', call['case_id'])
-            if (case['created_at'] != call['case_version'] or case['risk_zone'] != 'RED'
-                    or not case.get('urgent_outreach_approved_at')):
+            urgent = case['risk_zone'] == 'RED' and case.get('urgent_outreach_approved_at')
+            planned = (
+                case['risk_zone'] == 'YELLOW' and case['status'] == 'VISIT_PROPOSED'
+                and case.get('referral_approved_at') and call.get('appointment_id') == case.get('appointment_id')
+                and case.get('appointment_id')
+            )
+            if planned:
+                visit, _ = get(db, 'Appointment', case['appointment_id'])
+                planned = (visit['status'] == 'proposed' and visit.get('start')
+                           and datetime.fromisoformat(visit['start']) > now())
+            if case['created_at'] != call['case_version'] or not (urgent or planned):
                 call['status'] = 'SUPERSEDED'
             elif status == 'DEMO_CALL_QUEUED':
                 call.update(status='DEMO_CALL_RUNNING', next_transition_at=stamp(now() + timedelta(seconds=3)))
-                audit(db, case['id'], 'demo_call_started', 'Simulated urgent outreach started')
+                audit(db, case['id'], 'demo_call_started', 'Simulated outreach started')
             else:
                 call.update(status='DEMO_CALL_COMPLETE', attempts=1)
                 audit(db, case['id'], 'demo_call_completed', 'Simulation completed; no phone was dialed')
@@ -365,9 +392,12 @@ def registry():
                 job = jobs[event['id']]
                 event['analysis_status'] = job['status']
                 event['analysis_source'] = (job.get('result') or {}).get('source')
+        doctors = all_of(db, 'PractitionerRole')
+        visits = all_of(db, 'Appointment')
         return {
-            'mode': 'mock', 'patients': patients, 'cases': cases, 'doctors': all_of(db, 'PractitionerRole'),
-            'calls': all_of(db, 'Call'), 'appointments': all_of(db, 'Appointment'), 'audit': all_of(db, 'AuditEvent'),
+            'mode': 'mock', 'patients': patients, 'cases': cases, 'doctors': doctors,
+            'calls': all_of(db, 'Call'), 'appointments': visits, 'audit': all_of(db, 'AuditEvent'),
+            'availability': demo_availability(doctors, visits),
             'demo_stream': stream,
         }
 
@@ -431,8 +461,6 @@ def approve_referral(case_id: str, approval: ReferralApproval):
             case.update(status='REFERRED', referral_status='AWAITING_FACILITY')
         put(db, 'Case', case_id, case)
         audit(db, case_id, 'referral_approved', 'Sample clinician approved referral', actor=approval.practitioner_id)
-        if case['status'] == 'VISIT_PROPOSED':
-            queue_call(db, case, str(uuid4()))
         return case
 
 @app.post('/api/cases/{case_id}/approve-urgent-outreach')
@@ -449,10 +477,9 @@ def approve_urgent_outreach(case_id: str, approval: ReferralApproval):
         case.update(urgent_outreach_approved_at=stamp(), urgent_outreach_approved_by=approval.practitioner_id)
         put(db, 'Case', case_id, case)
         call = queue_call(db, case, f"urgent-demo:{case['created_at']}")
-        call.update(status='DEMO_CALL_QUEUED', next_transition_at=stamp(now() + timedelta(seconds=1)))
         if case['cohort_type'] == 'NEONATAL':
             call['target_role'] = 'MOTHER_OF_NEWBORN'
-        put(db, 'Call', call['id'], call)
+        schedule_demo_call(db, call)
         audit(db, case_id, 'urgent_outreach_approved', 'Assigned sample clinician approved simulated family call',
               actor=approval.practitioner_id)
         return case
@@ -484,9 +511,8 @@ def case_action(case_id:str,action:str):
             audit(db, case_id, 'postpartum_follow_up', 'Staff recorded the postpartum follow-up')
             return case
         if action == 'call':
-            if case['risk_zone'] == 'RED':
-                raise HTTPException(409, 'Shoshilinch qo‘ng‘iroq klinik tasdiqdan keyin avtomatik boshlanadi')
-            require_planned_contact_approval(case)
+            if case['risk_zone'] in ('RED', 'YELLOW'):
+                raise HTTPException(409, 'Qo‘ng‘iroq klinik tasdiqdan keyin avtomatik boshlanadi')
             for task in all_of(db, 'Call'):
                 if (task['case_id'] == case_id and task.get('case_version') == case['created_at']
                         and task.get('appointment_id') == case.get('appointment_id')
@@ -502,25 +528,59 @@ def case_action(case_id:str,action:str):
         audit(db,case_id,'accept','Case acknowledgment recorded')
         return case
 
+DEMO_VISIT_DURATION = timedelta(minutes=30)
+
+
+def slot_occupied(visits, practitioner_id, start, previous_id=None):
+    for visit in visits:
+        if (visit['id'] == previous_id or visit.get('practitioner') != practitioner_id
+                or visit.get('status') not in ('proposed', 'booked') or not visit.get('start')):
+            continue
+        try:
+            booked = datetime.fromisoformat(visit['start'])
+        except (ValueError, TypeError):
+            continue
+        if booked.utcoffset() is not None and abs(booked - start) < DEMO_VISIT_DURATION:
+            return True
+    return False
+
+
+def demo_availability(doctors, visits):
+    local = now().astimezone(TZ)
+    slots = []
+    for day in range(3):
+        date = local + timedelta(days=day)
+        for hour in (9, 11, 14):
+            start = date.replace(hour=hour, minute=0, second=0, microsecond=0)
+            if start <= local:
+                continue
+            for practitioner in doctors:
+                practitioner_id = practitioner['id']
+                slots.append({
+                    'id': f'{practitioner_id}-{start:%Y%m%d-%H%M}',
+                    'practitioner_id': practitioner_id,
+                    'facility': 'OVaBMU markazi',
+                    'start': stamp(start),
+                    'end': stamp(start + DEMO_VISIT_DURATION),
+                    'available': not slot_occupied(visits, practitioner_id, start),
+                })
+    return slots
+
+
 class FacilityResponse(BaseModel):
     mode: Literal['timed', 'untimed']
-    facility: str = Field(min_length=1, max_length=160)
+    facility: str | None = Field(default=None, max_length=160)
     practitioner_id: str | None = None
     start: datetime | None = None
+    slot_id: str | None = Field(default=None, max_length=80)
     confirmed: bool = False
 
 @app.post('/api/referrals/{case_id}/response')
 def record_facility_response(case_id: str, response: FacilityResponse):
-    facility = response.facility.strip()
-    if not facility:
-        raise HTTPException(422, 'Muassasa nomini kiriting')
+    facility = (response.facility or '').strip()
+    practitioner_id = response.practitioner_id
     start = response.start
-    if response.mode == 'timed':
-        if not start or start.utcoffset() is None:
-            raise HTTPException(422, 'Qabul va vaqt mintaqasini kiriting')
-        if not response.practitioner_id or start <= now():
-            raise HTTPException(422, 'Qabul shifokori va kelajakdagi vaqtni kiriting')
-    elif start or response.confirmed:
+    if response.mode == 'untimed' and (start or response.confirmed or response.slot_id):
         raise HTTPException(422, 'Vaqtsiz tashrif uchun sana yoki tasdiq kiritilmaydi')
     with connect() as db:
         db.execute('BEGIN IMMEDIATE')
@@ -529,19 +589,37 @@ def record_facility_response(case_id: str, response: FacilityResponse):
             raise HTTPException(409, 'Avval mas’ul shifokor yo‘llanmani tasdiqlashi kerak')
         if case.get('referral_status') not in ('AWAITING_FACILITY', 'RESCHEDULE_REQUESTED'):
             raise HTTPException(409, 'Muassasa javobi allaqachon qayd etilgan')
-        if response.practitioner_id:
-            get(db, 'PractitionerRole', response.practitioner_id)
+        visits = all_of(db, 'Appointment') if response.mode == 'timed' else []
+        if response.slot_id:
+            slots = demo_availability(all_of(db, 'PractitionerRole'), visits)
+            slot = next((slot for slot in slots if slot['id'] == response.slot_id), None)
+            if not slot or not slot['available']:
+                raise HTTPException(409, 'Bu vaqt endi bo‘sh emas. Boshqa vaqtni tanlang')
+            facility = slot['facility']
+            practitioner_id = slot['practitioner_id']
+            start = datetime.fromisoformat(slot['start'])
+        if not facility:
+            raise HTTPException(422, 'Muassasa nomini kiriting')
+        if response.mode == 'timed':
+            if not start or start.utcoffset() is None:
+                raise HTTPException(422, 'Qabul va vaqt mintaqasini kiriting')
+            if not practitioner_id or start <= now():
+                raise HTTPException(422, 'Qabul shifokori va kelajakdagi vaqtni kiriting')
+            if slot_occupied(visits, practitioner_id, start, case.get('appointment_id')):
+                raise HTTPException(409, 'Bu vaqt band. Boshqa vaqtni tanlang')
+        if practitioner_id:
+            get(db, 'PractitionerRole', practitioner_id)
         if case.get('appointment_id'):
             old, version = get(db, 'Appointment', case['appointment_id'])
             old['status'] = 'cancelled'
             put(db, 'Appointment', old['id'], old, version + 1)
         for task in all_of(db, 'Call'):
-            if task['case_id'] == case_id and task['status'] in ('READY', 'QUEUED', 'NO_ANSWER'):
+            if task['case_id'] == case_id and task['status'] in ('READY', 'QUEUED', 'NO_ANSWER', 'DEMO_CALL_QUEUED', 'DEMO_CALL_RUNNING'):
                 task['status'] = 'SUPERSEDED'
                 put(db, 'Call', task['id'], task)
         visit_id = str(uuid4())
         visit = {
-            'id': visit_id, 'patient': case_id, 'practitioner': response.practitioner_id,
+            'id': visit_id, 'patient': case_id, 'practitioner': practitioner_id,
             'facility': facility, 'mode': response.mode, 'source': 'facility',
             'status': 'untimed' if response.mode == 'untimed' else 'booked' if response.confirmed else 'proposed',
         }
@@ -554,7 +632,7 @@ def record_facility_response(case_id: str, response: FacilityResponse):
                     status={'untimed': 'VISIT_UNTIMED', 'booked': 'PATIENT_CONFIRMED', 'proposed': 'VISIT_PROPOSED'}[visit['status']])
         put(db, 'Case', case_id, case)
         if visit['status'] == 'proposed':
-            queue_call(db, case, visit_id)
+            schedule_demo_call(db, queue_call(db, case, visit_id))
         audit(db, case_id, 'facility_response', visit['status'])
         return visit
 
@@ -652,6 +730,16 @@ def voice_event(event:VoiceEvent):
         else:
             case['unanswered_attempts']=case.get('unanswered_attempts',0)+1
             if case['unanswered_attempts']>=2: case.update(nurse_notified=True,family_contact_queued=True)
+        if case.get('appointment_id'):
+            calls = all_of(db, 'Call')
+            call = next((task for task in reversed(calls)
+                         if task['case_id'] == case['id']
+                         and task.get('appointment_id') == case['appointment_id']
+                         and task.get('case_version') == case['created_at']
+                         and task['status'] != 'SUPERSEDED'), None)
+            if call:
+                call.update(status=event.intent, attempts=max(1, call['attempts']), recorded_at=stamp())
+                put(db, 'Call', call['id'], call)
         put(db,'VoiceLog',event.event_id,{**event.model_dump(),'created_at':stamp(),'mode':'simulation'})
         put(db,'Case',case['id'],case)
         db.execute('INSERT INTO idempotency VALUES(?,?)',(key,case['id']))

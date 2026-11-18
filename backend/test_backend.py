@@ -14,26 +14,51 @@ class BackendTests(unittest.TestCase):
     def tearDown(self):
         self.client.__exit__(None,None,None)
         self.tmp.cleanup()
-    def facility_visit(self, case_id='p2', *, confirmed=False, mode='timed'):
+    def facility_visit(self, case_id='p2', *, confirmed=False, mode='timed', practitioner_id='d1'):
         from datetime import timedelta
         case = next(c for c in self.client.get('/api/registry').json()['cases'] if c['id'] == case_id)
         approval = self.client.post(f'/api/referrals/{case_id}/approve', json={'practitioner_id': case['assigned_practitioner_id']})
         self.assertEqual(approval.status_code, 200, approval.text)
-        payload = {'mode': mode, 'facility': 'Namuna poliklinikasi', 'practitioner_id': 'd1', 'confirmed': confirmed}
+        payload = {'mode': mode, 'facility': 'Namuna poliklinikasi',
+                   'practitioner_id': practitioner_id, 'confirmed': confirmed}
         if mode == 'timed':
             payload['start'] = main.stamp(main.now() + timedelta(days=1))
         response = self.client.post(f'/api/referrals/{case_id}/response', json=payload)
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
-    def test_manual_outreach_keeps_rescheduling_in_the_referral_queue(self):
+    def test_sample_slot_booking_persists_and_cannot_be_double_booked(self):
+        data = self.client.get('/api/registry').json()
+        slot = next(slot for slot in data['availability'] if slot['available'])
+        payload = {'mode': 'timed', 'slot_id': slot['id']}
+        case_path = '/api/referrals/p2'
+        self.assertEqual(self.client.post(f'{case_path}/response', json=payload).status_code, 409)
+        for case_id in ('p2', 'p4'):
+            case = next(case for case in data['cases'] if case['id'] == case_id)
+            response = self.client.post(f'/api/referrals/{case_id}/approve',
+                                        json={'practitioner_id': case['assigned_practitioner_id']})
+            self.assertEqual(response.status_code, 200, response.text)
+        response = self.client.post(f'{case_path}/response', json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        visit = response.json()
+        self.assertEqual((visit['start'], visit['practitioner'], visit['facility']),
+                         (slot['start'], slot['practitioner_id'], slot['facility']))
+        registry = self.client.get('/api/registry').json()
+        self.assertIn(visit, registry['appointments'])
+        self.assertFalse(next(item for item in registry['availability'] if item['id'] == slot['id'])['available'])
+        self.assertEqual(self.client.post('/api/referrals/p4/response', json=payload).status_code, 409)
+
+    def test_call_result_keeps_rescheduling_in_the_referral_queue(self):
         original = self.facility_visit()
         data = self.client.get('/api/registry').json()
         call = next(c for c in data['calls'] if c['case_id'] == 'p2')
-        path = f"/api/outreach/{call['id']}/outcome"
-        request = {'outcome': 'RESCHEDULE_REQUESTED', 'attempt_id': 'a1'}
-        self.assertEqual(self.client.post(path, json=request).json()['attempts'], 1)
-        self.assertEqual(self.client.post(path, json=request).json()['attempts'], 1)
+        self.assertEqual(self.client.post(f"/api/outreach/{call['id']}/outcome",
+                                         json={'outcome': 'RESCHEDULE_REQUESTED', 'attempt_id': 'a1'}).status_code, 409)
+        callback = {'case_id': 'p2', 'intent': 'RESCHEDULE_REQUESTED', 'event_id': 'a1'}
+        for _ in range(2):
+            self.assertEqual(self.client.post('/webhooks/voicelab/status', json=callback).status_code, 200)
+        logged = next(row for row in self.client.get('/api/registry').json()['calls'] if row['id'] == call['id'])
+        self.assertEqual((logged['status'], logged['attempts']), ('RESCHEDULE_REQUESTED', 1))
         updated = self.client.get(f"/dmed/v2/Appointment/{original['id']}").json()
         self.assertEqual(updated['status'], 'reschedule_requested')
         self.assertEqual(updated['start'], original['start'])
@@ -112,6 +137,25 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(next(c for c in state['cases'] if c['id']=='p2')['assigned_practitioner_id'], 'd3')
         self.assertTrue(any(c.get('appointment_id') == result['id'] for c in state['calls']))
         self.assertEqual(self.client.post('/api/referrals/p3/response', json=visit).status_code, 409)
+
+    def test_planned_call_runs_after_booking_without_confirming_attendance_or_acceptance(self):
+        from datetime import datetime, timedelta
+        from unittest.mock import patch
+        visit = self.facility_visit()
+        self.assertEqual(self.client.post('/api/cases/p2/call').status_code, 409)
+        with main.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            call = next(task for task in main.all_of(db, 'Call') if task['appointment_id'] == visit['id'])
+            self.assertEqual(call['status'], 'DEMO_CALL_QUEUED')
+            queued_until = datetime.fromisoformat(call['next_transition_at'])
+            with patch.object(main, 'now', return_value=queued_until):
+                main.process_due(db)
+                self.assertEqual(main.get(db, 'Call', call['id'])[0]['status'], 'DEMO_CALL_RUNNING')
+            with patch.object(main, 'now', return_value=queued_until + timedelta(seconds=4)):
+                main.process_due(db)
+                result, _ = main.get(db, 'Call', call['id'])
+                self.assertEqual((result['status'], result['attempts']), ('DEMO_CALL_COMPLETE', 1))
+                self.assertEqual(main.get(db, 'Appointment', visit['id'])[0]['status'], 'proposed')
 
     def test_openrouter_can_only_reorder_existing_evidence(self):
         from unittest.mock import patch
@@ -314,7 +358,7 @@ class BackendTests(unittest.TestCase):
     def test_worker_counts_only_confirmed_timed_visits_as_no_show(self):
         from datetime import timedelta
         confirmed = self.facility_visit('p2', confirmed=True)
-        proposed = self.facility_visit('p4')
+        proposed = self.facility_visit('p4', practitioner_id='d4')
         with main.connect() as db:
             for visit in (confirmed, proposed):
                 visit['start'] = main.stamp(main.now() - timedelta(hours=3))

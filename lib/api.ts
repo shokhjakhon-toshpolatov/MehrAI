@@ -29,8 +29,14 @@ export type Appointment = {
   practitioner?: string;
   facility?: string;
 };
-export type OutreachOutcome =
-  "REACHED" | "CONFIRMED" | "RESCHEDULE_REQUESTED" | "NO_ANSWER";
+export type AvailabilitySlot = {
+  id: string;
+  practitioner_id: string;
+  facility: string;
+  start: string;
+  end: string;
+  available: boolean;
+};
 export type DemoAnalysis = {
   status: "PENDING" | "COMPLETE" | "SUPERSEDED";
   result?: RiskExplanation | null;
@@ -55,6 +61,7 @@ export type RegistryResult = {
   demoStream: DemoStream | null;
   demoAnalyses: Record<string, DemoAnalysis>;
   appointments: Appointment[];
+  availability: AvailabilitySlot[];
   patients: Patient[];
   calls: Outreach[];
   source: "mock" | "live";
@@ -67,7 +74,7 @@ type ApiPatient = {
   name: string;
   cohort_type: Patient["cohort"];
   mother_id?: string;
-  contact?: { mother_name?: string; phone_display?: string };
+  contact?: { mother_name?: string };
   postpartum_days?: number;
   age?: number;
   age_days?: number;
@@ -110,6 +117,7 @@ type ApiCall = {
 type ApiRegistry = {
   demo_stream?: DemoStream | null;
   appointments?: Appointment[];
+  availability?: AvailabilitySlot[];
   mode: "mock" | "live";
   patients: ApiPatient[];
   cases: ApiCase[];
@@ -147,9 +155,9 @@ const targets: Record<string, string> = {
 };
 const callStatuses: Record<string, string> = {
   QUEUED: "Navbatda",
-  DEMO_CALL_QUEUED: "Sinov qo‘ng‘irog‘i navbatda",
-  DEMO_CALL_RUNNING: "Sinov qo‘ng‘irog‘i davom etmoqda",
-  DEMO_CALL_COMPLETE: "Sinov qo‘ng‘irog‘i yakunlandi",
+  DEMO_CALL_QUEUED: "AI sinov qo‘ng‘irog‘i navbatda",
+  DEMO_CALL_RUNNING: "AI sinov qo‘ng‘irog‘i davom etmoqda",
+  DEMO_CALL_COMPLETE: "AI sinov qo‘ng‘irog‘i yakunlandi",
   READY: "Qo‘ng‘iroqqa tayyor",
   CONFIRMED: "Tasdiqlangan",
   RESCHEDULE_REQUESTED: "Boshqa vaqt so‘ralgan",
@@ -279,7 +287,6 @@ export async function loadRegistry(): Promise<RegistryResult> {
             : `${p.gestational_weeks ?? "—"}-hafta`,
       motherId: p.mother_id,
       motherName: p.contact?.mother_name,
-      phoneDisplay: p.contact?.phone_display,
       assessedAt: c.assessment_at,
       assessedBy: c.assessed_by
         ? (doctorIds[c.assessed_by] ?? c.assessed_by)
@@ -349,6 +356,7 @@ export async function loadRegistry(): Promise<RegistryResult> {
         ? (doctorIds[visit.practitioner] ?? visit.practitioner)
         : undefined,
     })),
+    availability: data.availability ?? [],
     source: data.mode,
     audit: data.audit ?? [],
   };
@@ -356,21 +364,11 @@ export async function loadRegistry(): Promise<RegistryResult> {
 
 export async function performCaseAction(
   id: string,
-  action: "accept" | "busy" | "call" | "postpartum-follow-up",
+  action: "accept" | "busy" | "postpartum-follow-up",
 ): Promise<void> {
   await request(`/api/cases/${encodeURIComponent(id)}/${action}`, "POST");
 }
 
-export function recordOutcome(
-  id: string,
-  outcome: OutreachOutcome,
-  attemptId: string,
-) {
-  return request(`/api/outreach/${encodeURIComponent(id)}/outcome`, "POST", {
-    outcome,
-    attempt_id: attemptId,
-  });
-}
 export function runScenario(
   scenario: "maternal-red" | "neonatal-red" | "fast-forward",
 ) {
@@ -379,9 +377,10 @@ export function runScenario(
 
 export type FacilityResponse = {
   mode: "timed" | "untimed";
-  facility: string;
+  facility?: string;
   practitioner_id?: string;
   start?: string;
+  slot_id?: string;
   confirmed: boolean;
 };
 export function recordFacilityResponse(

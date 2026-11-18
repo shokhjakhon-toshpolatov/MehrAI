@@ -37,17 +37,40 @@
 }
 .outreach-row p { margin-top: 4px; color: #627790; font-size: 11px; }
 .outreach-row strong { font-size: 11px; }
-.outreach-row form { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
-.outreach-row select { max-width: 100%; padding: 7px; border: 1px solid #cdd9e6; background: #fff; border-radius: 6px; }
 .facility-response fieldset{display:grid;gap:11px;border:0;margin:0;padding:0;min-width:0}
 .facility-response label{display:grid;gap:5px;font-size:12px;color:#304459}
 .facility-response input,.facility-response select{border:1px solid #ccd9e7;border-radius:6px;background:white;color:#18334f;padding:8px;min-width:0}
-.facility-response .facility-confirm{display:flex;align-items:center}
+.facility-time-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.intro-actions{display:flex;flex-wrap:wrap;gap:10px}
+.availability-panel{margin-bottom:18px}
+.availability-doctor{max-width:100%;padding:8px;border:1px solid #ccd9e7;border-radius:6px;background:white;color:#18334f}
+.availability-panel .appointments-table{min-width:495px}
+.booking-dialog{
+  width:min(460px,calc(100% - 32px));
+  max-height:calc(100dvh - 32px);
+  margin:auto;
+  padding:24px;
+  overflow:auto;
+  border:1px solid var(--line);
+  border-radius:14px;
+  background:#fff;
+  color:#18334f;
+  box-shadow:0 20px 60px #18334f33;
+}
+.booking-dialog::backdrop{background:#17334e66}
+.booking-heading{display:flex;align-items:center;justify-content:space-between;gap:14px}
+.booking-heading h2{font-size:20px}
+.booking-dialog form,.booking-patient{display:grid;gap:10px}
+.booking-dialog form{margin-top:16px;font-size:12px;line-height:1.5}
+.booking-patient select{width:100%;padding:10px;border:1px solid #ccd9e7;border-radius:7px;background:#fff;color:#18334f}
+.booking-slot,.booking-review{display:grid;gap:4px;margin-top:10px;padding:12px;border-radius:8px;background:#eef5ff;font-size:12px}
+.booking-review{background:#fff6df}
+.booking-dialog .case-rationale{margin-top:0;padding:10px 0}
+.booking-dialog form>.button{justify-self:start;white-space:normal}
+.booking-error{color:#b91c35}
 .facility-response button,.detail-block p+.button{margin-top:8px;justify-self:start}
 .patient-contact h3{display:flex;align-items:center;gap:6px}
 .patient-contact p,.detail-block>p{font-size:12px;color:#4c627a;margin-bottom:5px}
-.contact-outcome{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
-.contact-outcome select{max-width:100%;padding:7px;border:1px solid #cdd9e6;background:#fff;border-radius:6px}
 
 .zone-review{background:#edf0f3;color:#374151}
 .registry-tabs{overflow-x:auto}.registry-tab{flex-shrink:0;white-space:nowrap}

@@ -30,7 +30,6 @@ import { Patient, seedPatients, zoneLabels } from "@/lib/demo";
 import {
   loadRegistry,
   performCaseAction,
-  recordOutcome,
   approveReferral,
   approveUrgentOutreach,
   explainRisk,
@@ -40,11 +39,10 @@ import {
   type RiskExplanation,
   recordFacilityResponse,
   recordAttendance,
+  type AvailabilitySlot,
   type FacilityResponse,
   runScenario,
   type RegistryResult,
-  type OutreachOutcome,
-  type Outreach,
 } from "@/lib/api";
 
 const formatDate = (value: string) =>
@@ -67,6 +65,15 @@ const practitionerIds: Record<string, string> = {
   umarova: "d3",
   alimov: "d4",
 };
+const doctorById = Object.fromEntries(
+  Object.entries(practitionerIds).map(([key, id]) => [id, doctorNames[key]]),
+);
+const formatTime = (value: string) =>
+  new Date(value).toLocaleTimeString("uz-UZ", {
+    timeZone: "Asia/Tashkent",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 export default function Dashboard() {
   const [patients, setPatients] = useState<Patient[]>(seedPatients);
   const [persona, setPersona] = useState("district");
@@ -80,6 +87,12 @@ export default function Dashboard() {
   const [data, setData] = useState<RegistryResult | null>(null);
   const [offline, setOffline] = useState(true);
   const [working, setWorking] = useState(false);
+  const [availabilityDoctor, setAvailabilityDoctor] = useState("d1");
+  const [booking, setBooking] = useState<{
+    slot?: AvailabilitySlot;
+    patientId?: string;
+  } | null>(null);
+  const [bookingError, setBookingError] = useState("");
   const [clock, setClock] = useState(0);
   const requestVersion = useRef(0);
   const refresh = useCallback(async () => {
@@ -136,7 +149,7 @@ export default function Dashboard() {
     setToast(message);
     setTimeout(() => setToast(""), 4500);
   };
-  const save = async (action: () => Promise<unknown>) => {
+  const save = async (action: () => Promise<unknown>, reportError = notify) => {
     if (offline || working) return;
     setWorking(true);
     try {
@@ -144,7 +157,10 @@ export default function Dashboard() {
       await refresh();
       notify("O‘zgarish serverga saqlandi");
     } catch (error) {
-      notify(error instanceof Error ? error.message : "Saqlash amalga oshmadi");
+      await refresh();
+      reportError(
+        error instanceof Error ? error.message : "Saqlash amalga oshmadi",
+      );
     } finally {
       setWorking(false);
     }
@@ -172,7 +188,7 @@ export default function Dashboard() {
     scoped.some((p) => p.id === c.patientId),
   );
   const tasks = calls.filter((c) =>
-    ["READY", "QUEUED", "NO_ANSWER"].includes(c.status),
+    ["DEMO_CALL_QUEUED", "DEMO_CALL_RUNNING"].includes(c.status),
   );
   const emergency = scoped.filter(
     (p) => p.zone === "RED" && !p.urgentOutreachApprovedAt,
@@ -181,8 +197,6 @@ export default function Dashboard() {
     (p) => p.referralStatus === "AWAITING_CLINICIAN",
   );
   const alerts = [...emergency, ...reviewQueue];
-  const needsApproval =
-    selected?.zone === "YELLOW" && !selected.referralApprovedAt;
   const visits = (data?.appointments ?? [])
     .filter(
       (visit) =>
@@ -199,24 +213,28 @@ export default function Dashboard() {
       visit.patient === selected?.id &&
       ["proposed", "booked", "untimed"].includes(visit.status),
   );
-  const canContact =
-    selected?.zone !== "YELLOW" ||
-    Boolean(selected?.referralApprovedAt && selectedVisit);
+  const availability = data?.availability ?? [];
+  const availableSlots = availability.filter((slot) => slot.available);
+  const scheduleDoctor =
+    persona === "district" ? availabilityDoctor : practitionerIds[persona];
+  const bookablePatients = patients.filter(
+    (patient) =>
+      isAwaitingFacility(patient) ||
+      (patient.referralStatus === "AWAITING_CLINICIAN" &&
+        (persona === "district" || patient.doctor === persona)),
+  );
   const relatedPatients =
     selected?.cohort === "POSTPARTUM"
       ? patients.filter((p) => p.motherId === selected.id)
       : selected?.motherId
         ? patients.filter((p) => p.id === selected.motherId)
         : [];
-  const selectedTasks = (data?.calls ?? []).filter(
-    (call) => call.patientId === selected?.id,
+  const latestCall = (data?.calls ?? []).findLast(
+    (call) =>
+      call.patientId === selected?.id &&
+      call.status !== "SUPERSEDED" &&
+      (!selectedVisit || call.appointmentId === selectedVisit.id),
   );
-  const activeContact = selectedTasks.find(isOpenContact);
-  const saveContact = (
-    task: Outreach,
-    outcome: OutreachOutcome,
-    attemptId: string,
-  ) => save(() => recordOutcome(task.id, outcome, attemptId));
   const nextDeadline = emergency.find(isPending)?.deadline;
   const seconds =
     nextDeadline && clock
@@ -399,11 +417,24 @@ export default function Dashboard() {
               </h1>
               <p>O‘z vaqtida e’tibor. Uzluksiz kuzatuv. Sog‘lom kelajak.</p>
             </div>
-            <button className="button primary" onClick={() => setSim(true)}>
-              <Zap size={16} />
-              Demo simulyator
-              <ChevronRight size={15} />
-            </button>
+            <div className="intro-actions">
+              <button className="button" onClick={() => setSim(true)}>
+                <Zap size={16} />
+                Demo simulyator
+              </button>
+              {tab === "overview" && (
+                <button
+                  className="button primary"
+                  disabled={offline || working || streamActive}
+                  onClick={runStreamDemo}
+                >
+                  <Activity size={17} />
+                  {streamActive
+                    ? "Ma’lumotlar oqimi davom etmoqda"
+                    : "Ma’lumotlar oqimini boshlash"}
+                </button>
+              )}
+            </div>
           </div>
           <div className="context-bar">
             <div>
@@ -433,7 +464,7 @@ export default function Dashboard() {
           </div>
           <div className="workspace-status" role="status">
             {offline
-              ? "Server ulanmagan · faqat ko‘rish"
+              ? "Server ulanmagan · saqlash va ma’lumotlar oqimi uchun mahalliy API’ni ishga tushiring."
               : "Server ulangan · sun’iy ma’lumotlar · tashqi qo‘ng‘iroqlar o‘chirilgan"}
           </div>
           {tab === "overview" && (
@@ -742,7 +773,8 @@ export default function Dashboard() {
                   <div>
                     <h2>Muassasa javobi kutilayotgan yo‘llanmalar</h2>
                     <p>
-                      Muassasa bildirgan qabul vaqtini bemor kartasiga kiriting.
+                      Bemor kartasida bo‘sh vaqtni tanlang yoki muassasa
+                      bildirgan vaqtni kiriting.
                     </p>
                   </div>
                 </div>
@@ -778,100 +810,183 @@ export default function Dashboard() {
             </div>
           )}
           {tab === "appointments" && (
-            <section className="panel">
-              <div className="panel-heading">
-                <div>
-                  <h2>
-                    {persona === "district"
-                      ? "Tuman qabullari"
-                      : `Qabullar · ${doctorNames[persona]}`}
-                  </h2>
-                  <p>Jadval qabul qiluvchi shifokor bo‘yicha ko‘rsatiladi.</p>
+            <>
+              <section className="panel availability-panel">
+                <div className="panel-heading">
+                  <div>
+                    <h2>Shifokorning bo‘sh vaqtlari</h2>
+                    <p>Namunaviy jadval · Toshkent vaqti</p>
+                  </div>
+                  {persona === "district" && (
+                    <select
+                      className="availability-doctor"
+                      aria-label="Jadval uchun shifokor"
+                      value={availabilityDoctor}
+                      onChange={(event) =>
+                        setAvailabilityDoctor(event.target.value)
+                      }
+                    >
+                      {Object.entries(doctorById).map(([id, name]) => (
+                        <option key={id} value={id}>
+                          {name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                 </div>
-                <span>Toshkent vaqti</span>
-              </div>
-              <div className="registry-table-scroll">
-                <table className="registry-table appointments-table">
-                  <thead>
-                    <tr>
-                      <th>Bemor</th>
-                      <th>Qabul vaqti</th>
-                      <th>Qabul shifokori</th>
-                      <th>Muassasa</th>
-                      <th>Holat</th>
-                      <th>Amal</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {visits.map(({ visit: a, patient: p }) => (
-                      <tr key={a.id}>
-                        <td>
-                          <button
-                            className="patient-name"
-                            onClick={() => setSelected(p)}
-                          >
-                            {p.name}
-                          </button>
-                        </td>
-                        <td>
-                          {a.start ? formatDate(a.start) : "Aniq vaqtsiz"}
-                        </td>
-                        <td>
-                          {a.practitioner
-                            ? (doctorNames[a.practitioner] ?? a.practitioner)
-                            : "Ko‘rsatilmagan"}
-                        </td>
-                        <td>{a.facility ?? "Ko‘rsatilmagan"}</td>
-                        <td>
-                          <span
-                            className={`badge ${p.statusCode === "NO_SHOW_ALERTED" ? "red" : p.statusCode === "ATTENDED" || a.status === "booked" ? "green" : "amber"}`}
-                          >
-                            {p.statusCode === "ATTENDED"
-                              ? "Keldi"
-                              : p.statusCode === "NO_SHOW_ALERTED"
-                                ? "Kelmadi"
-                                : a.status === "booked"
-                                  ? "Tasdiqlangan"
-                                  : a.status === "untimed"
-                                    ? "Kelishilgan"
-                                    : "Tasdiq kutilmoqda"}
-                          </span>
-                        </td>
-                        <td>
-                          {p.statusCode !== "ATTENDED" && (
-                            <button
-                              className="button"
-                              disabled={offline || working}
-                              onClick={() => save(() => recordAttendance(a.id))}
-                            >
-                              Kelganini qayd etish
-                            </button>
-                          )}
-                        </td>
+                {offline || !availability.length ? (
+                  <p className="workflow-empty">
+                    {offline
+                      ? "Jadvalni ko‘rish uchun mahalliy API’ga ulaning."
+                      : "Namunaviy jadval mavjud emas."}
+                  </p>
+                ) : (
+                  <div className="registry-table-scroll">
+                    <table className="registry-table appointments-table">
+                      <thead>
+                        <tr>
+                          <th>Sana va vaqt</th>
+                          <th>Muassasa</th>
+                          <th>Holat</th>
+                          <th>Amal</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {availability
+                          .filter(
+                            (slot) => slot.practitioner_id === scheduleDoctor,
+                          )
+                          .map((slot) => (
+                            <tr key={slot.id}>
+                              <td>
+                                {formatDate(slot.start)} –{" "}
+                                {formatTime(slot.end)}
+                              </td>
+                              <td>{slot.facility}</td>
+                              <td>
+                                <span
+                                  className={`badge ${slot.available ? "green" : "amber"}`}
+                                >
+                                  {slot.available ? "Bo‘sh" : "Band"}
+                                </span>
+                              </td>
+                              <td>
+                                {slot.available && (
+                                  <button
+                                    className="button"
+                                    onClick={() => {
+                                      setBookingError("");
+                                      setBooking({ slot });
+                                    }}
+                                  >
+                                    Qabul belgilash
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+              <section className="panel">
+                <div className="panel-heading">
+                  <div>
+                    <h2>
+                      {persona === "district"
+                        ? "Tuman qabullari"
+                        : `Qabullar · ${doctorNames[persona]}`}
+                    </h2>
+                    <p>Jadval qabul qiluvchi shifokor bo‘yicha ko‘rsatiladi.</p>
+                  </div>
+                  <span>Toshkent vaqti</span>
+                </div>
+                <div className="registry-table-scroll">
+                  <table className="registry-table appointments-table">
+                    <thead>
+                      <tr>
+                        <th>Bemor</th>
+                        <th>Qabul vaqti</th>
+                        <th>Qabul shifokori</th>
+                        <th>Muassasa</th>
+                        <th>Holat</th>
+                        <th>Amal</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {!visits.length && (
-                <p className="workflow-empty">Kelishilgan tashriflar yo‘q.</p>
-              )}
-              <div className="workflow-footer">
-                <button
-                  className="text-button"
-                  onClick={() => setTab("referrals")}
-                >
-                  Yo‘llanmalar <ArrowRight size={14} />
-                </button>
-              </div>
-            </section>
+                    </thead>
+                    <tbody>
+                      {visits.map(({ visit: a, patient: p }) => (
+                        <tr key={a.id}>
+                          <td>
+                            <button
+                              className="patient-name"
+                              onClick={() => setSelected(p)}
+                            >
+                              {p.name}
+                            </button>
+                          </td>
+                          <td>
+                            {a.start ? formatDate(a.start) : "Aniq vaqtsiz"}
+                          </td>
+                          <td>
+                            {a.practitioner
+                              ? (doctorNames[a.practitioner] ?? a.practitioner)
+                              : "Ko‘rsatilmagan"}
+                          </td>
+                          <td>{a.facility ?? "Ko‘rsatilmagan"}</td>
+                          <td>
+                            <span
+                              className={`badge ${p.statusCode === "NO_SHOW_ALERTED" ? "red" : p.statusCode === "ATTENDED" || a.status === "booked" ? "green" : "amber"}`}
+                            >
+                              {p.statusCode === "ATTENDED"
+                                ? "Keldi"
+                                : p.statusCode === "NO_SHOW_ALERTED"
+                                  ? "Kelmadi"
+                                  : a.status === "booked"
+                                    ? "Tasdiqlangan"
+                                    : a.status === "untimed"
+                                      ? "Kelishilgan"
+                                      : "Tasdiq kutilmoqda"}
+                            </span>
+                          </td>
+                          <td>
+                            {p.statusCode !== "ATTENDED" && (
+                              <button
+                                className="button"
+                                disabled={offline || working}
+                                onClick={() =>
+                                  save(() => recordAttendance(a.id))
+                                }
+                              >
+                                Kelganini qayd etish
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {!visits.length && (
+                  <p className="workflow-empty">Kelishilgan tashriflar yo‘q.</p>
+                )}
+                <div className="workflow-footer">
+                  <button
+                    className="text-button"
+                    onClick={() => setTab("referrals")}
+                  >
+                    Yo‘llanmalar <ArrowRight size={14} />
+                  </button>
+                </div>
+              </section>
+            </>
           )}
           {tab === "voice" && (
             <section className="panel large-panel">
               <div className="panel-heading">
                 <div>
                   <h2>Bemor va oila bilan bog‘lanish</h2>
-                  <p>Xodim qayd etgan aloqa natijalari</p>
+                  <p>AI qo‘ng‘iroqlari va tizim qayd etgan holatlar</p>
                 </div>
               </div>
               {!calls.length && (
@@ -901,20 +1016,6 @@ export default function Dashboard() {
                       </p>
                     </div>
                     <strong>{c.statusLabel}</strong>
-                    {patient?.zone !== "RED" && isOpenContact(c) && (
-                      <ContactOutcomeForm
-                        key={c.id}
-                        task={c}
-                        timed={Boolean(
-                          c.appointmentId &&
-                          scheduledVisit(data?.appointments, c.appointmentId)
-                            ?.start &&
-                          patient?.statusCode !== "ATTENDED",
-                        )}
-                        disabled={offline || working}
-                        onSave={saveContact}
-                      />
-                    )}
                   </article>
                 );
               })}
@@ -1009,6 +1110,36 @@ export default function Dashboard() {
           ))}
         </div>
       )}
+      {booking && (
+        <BookingDialog
+          initialSlot={booking.slot}
+          initialPatientId={booking.patientId}
+          slots={availableSlots}
+          patients={bookablePatients}
+          analyses={data?.demoAnalyses}
+          offline={offline}
+          working={working}
+          error={bookingError}
+          onClose={() => setBooking(null)}
+          onBook={(patient, slot) =>
+            save(async () => {
+              setBookingError("");
+              if (!patient.referralApprovedAt) {
+                await approveReferral(
+                  patient.id,
+                  practitionerIds[patient.doctor],
+                );
+              }
+              await recordFacilityResponse(patient.id, {
+                mode: "timed",
+                slot_id: slot.id,
+                confirmed: false,
+              });
+              setBooking(null);
+            }, setBookingError)
+          }
+        />
+      )}
       {(selected || sim) && (
         <div
           className="overlay"
@@ -1052,11 +1183,7 @@ export default function Dashboard() {
                 </div>
                 <button
                   className="button primary demo-stream-start"
-                  disabled={
-                    offline ||
-                    working ||
-                    data?.demoStream?.status === "STREAMING"
-                  }
+                  disabled={offline || working || streamActive}
                   onClick={runStreamDemo}
                 >
                   <Activity size={17} /> Ma’lumotlar oqimini boshlash
@@ -1200,7 +1327,10 @@ export default function Dashboard() {
                           save(() => performCaseAction(selected.id, "accept"))
                         }
                       >
-                        <CheckCheck size={17} /> Holatni qabul qilish
+                        <CheckCheck size={17} />
+                        {selected.zone === "RED"
+                          ? "Shoshilinch ko‘rikni qayd etish"
+                          : "Ko‘rib chiqilganini qayd etish"}
                       </button>
                       {isPending(selected) && (
                         <button
@@ -1273,42 +1403,25 @@ export default function Dashboard() {
                       )}
                     </div>
                   )}
-                  {needsApproval && (
+                  {bookablePatients.some(
+                    (patient) => patient.id === selected.id,
+                  ) && (
                     <div className="detail-block">
-                      <h3>Klinik ko‘rik va yo‘llanma</h3>
-                      <p>
-                        Mas’ul shifokor natijalarni ko‘rib chiqqach, yo‘llanmani
-                        tasdiqlaydi.
-                      </p>
-                      {persona !== selected.doctor ? (
-                        <button
-                          className="button"
-                          disabled={!selected.doctor}
-                          onClick={() => setPersona(selected.doctor)}
-                        >
-                          Mas’ul shifokor ko‘rinishiga o‘tish
-                        </button>
-                      ) : (
-                        <button
-                          className="button primary"
-                          disabled={offline || working}
-                          onClick={() =>
-                            save(() =>
-                              approveReferral(
-                                selected.id,
-                                practitionerIds[selected.doctor],
-                              ),
-                            )
-                          }
-                        >
-                          <Check size={15} /> Yo‘llanmani tasdiqlash
-                        </button>
-                      )}
+                      <button
+                        className="button primary"
+                        disabled={offline || working}
+                        onClick={() => {
+                          setBookingError("");
+                          setBooking({ patientId: selected.id });
+                        }}
+                      >
+                        <CalendarDays size={15} /> Qabul belgilash
+                      </button>
                     </div>
                   )}
                   <div className="detail-block patient-contact">
                     <h3>
-                      <Phone size={16} /> Bemor bilan bog‘lanish
+                      <Phone size={16} /> AI qo‘ng‘irog‘i
                     </h3>
                     <p>
                       Aloqa oluvchi:{" "}
@@ -1328,23 +1441,14 @@ export default function Dashboard() {
                         </strong>
                       </p>
                     )}
-                    <p>
-                      Namuna telefon:{" "}
-                      <strong>
-                        {selected.phoneDisplay ?? "+998 •• ••• •• ••"}
-                      </strong>
-                    </p>
-                    <p>Manba: sinov IT-MED aloqa yozuvi</p>
-                    {selectedTasks.length > 0 && (
-                      <p>So‘nggi natija: {selectedTasks.at(-1)?.statusLabel}</p>
+                    {latestCall && (
+                      <p role="status">
+                        <strong>{latestCall.statusLabel}</strong>
+                      </p>
                     )}
                     {selected.zone === "RED" ? (
-                      selected.urgentOutreachApprovedAt ? (
-                        <p role="status">
-                          Shifokor tasdiqladi. Sinov qo‘ng‘irog‘i avtomatik
-                          ishga tushgan.
-                        </p>
-                      ) : selected.statusCode !== "DOCTOR_ACCEPTED" ? (
+                      selected.urgentOutreachApprovedAt ? null : selected.statusCode !==
+                        "DOCTOR_ACCEPTED" ? (
                         <p>Avval shoshilinch holatni ko‘rib chiqing.</p>
                       ) : persona !== selected.doctor ? (
                         <button
@@ -1367,45 +1471,24 @@ export default function Dashboard() {
                             )
                           }
                         >
-                          <Phone size={15} /> Aloqani tasdiqlash · avtomatik
-                          sinov qo‘ng‘irog‘i
+                          <Phone size={15} /> AI qo‘ng‘irog‘iga ruxsat berish
                         </button>
                       )
-                    ) : !canContact ? (
+                    ) : selected.zone === "YELLOW" &&
+                      !selectedVisit &&
+                      !latestCall ? (
                       <p>
-                        Mas’ul shifokor tasdig‘i va muassasa belgilagan tashrif
-                        kutilmoqda.
+                        Shifokor yo‘llanmani tasdiqlab, qabul vaqti saqlangach,
+                        AI bemorga avtomatik qo‘ng‘iroq qiladi.
                       </p>
-                    ) : activeContact ? (
-                      <ContactOutcomeForm
-                        key={activeContact.id}
-                        task={activeContact}
-                        timed={Boolean(
-                          activeContact.appointmentId &&
-                          selectedVisit?.id === activeContact.appointmentId &&
-                          selectedVisit.start &&
-                          selected.statusCode !== "ATTENDED",
-                        )}
-                        disabled={offline || working}
-                        onSave={saveContact}
-                      />
-                    ) : (
-                      <button
-                        className="button"
-                        type="button"
-                        disabled={offline || working}
-                        onClick={() =>
-                          save(() => performCaseAction(selected.id, "call"))
-                        }
-                      >
-                        Aloqa vazifasini ochish
-                      </button>
-                    )}
+                    ) : null}
                   </div>
                   {isAwaitingFacility(selected) && (
                     <FacilityResponseForm
                       key={selected.id}
-                      disabled={offline || working}
+                      offline={offline}
+                      working={working}
+                      slots={availableSlots}
                       rescheduling={
                         selected.referralStatus === "RESCHEDULE_REQUESTED"
                       }
@@ -1645,87 +1728,16 @@ function CaseRationale({
         !patient.assessedAt &&
         (patient.zone !== "RED" ||
           (patient.previousZone && patient.previousZone !== "RED")) && (
-          <button className="button" disabled={loading} onClick={load}>
+          <button
+            type="button"
+            className="button"
+            disabled={loading}
+            onClick={load}
+          >
             {loading ? "Dalillar ko‘rib chiqilmoqda…" : "AI tahlilini olish"}
           </button>
         )}
     </div>
-  );
-}
-
-function scheduledVisit(
-  visits: RegistryResult["appointments"] | undefined,
-  id: string,
-) {
-  return visits?.find(
-    (visit) => visit.id === id && ["proposed", "booked"].includes(visit.status),
-  );
-}
-
-function isOpenContact(task: Outreach) {
-  return ["READY", "QUEUED", "NO_ANSWER"].includes(task.status);
-}
-
-function ContactOutcomeForm({
-  task,
-  timed,
-  disabled,
-  onSave,
-}: {
-  task: Outreach;
-  timed: boolean;
-  disabled: boolean;
-  onSave: (task: Outreach, outcome: OutreachOutcome, attemptId: string) => void;
-}) {
-  const attempt = useRef<{
-    count: number;
-    outcome: OutreachOutcome;
-    id: string;
-  } | null>(null);
-  return (
-    <form
-      className="contact-outcome"
-      onSubmit={(e) => {
-        e.preventDefault();
-        const outcome = new FormData(e.currentTarget).get(
-          "outcome",
-        ) as OutreachOutcome;
-        if (
-          attempt.current?.count !== task.attempts ||
-          attempt.current.outcome !== outcome
-        ) {
-          attempt.current = {
-            count: task.attempts,
-            outcome,
-            id: globalThis.crypto.randomUUID(),
-          };
-        }
-        onSave(task, outcome, attempt.current.id);
-      }}
-    >
-      <select
-        name="outcome"
-        aria-label={`${task.patientName}: aloqa natijasi`}
-        required
-        defaultValue=""
-        disabled={disabled}
-      >
-        <option value="" disabled>
-          Natijani tanlang
-        </option>
-        <option value="REACHED">Bog‘lanildi</option>
-        {timed && (
-          <>
-            <option value="CONFIRMED">Qabul tasdiqlandi</option>
-            <option value="RESCHEDULE_REQUESTED">Boshqa vaqt so‘raldi</option>
-          </>
-        )}
-        <option value="NO_ANSWER">Javob yo‘q</option>
-      </select>
-      <button className="button" disabled={disabled}>
-        Qayd etish
-      </button>
-    </form>
   );
 }
 
@@ -1737,29 +1749,207 @@ function isAwaitingFacility(patient: Patient) {
   );
 }
 
+function BookingDialog({
+  initialSlot,
+  initialPatientId,
+  slots,
+  patients,
+  analyses,
+  offline,
+  working,
+  error,
+  onClose,
+  onBook,
+}: {
+  initialSlot?: AvailabilitySlot;
+  initialPatientId?: string;
+  slots: AvailabilitySlot[];
+  patients: Patient[];
+  analyses?: RegistryResult["demoAnalyses"];
+  offline: boolean;
+  working: boolean;
+  error: string;
+  onClose: () => void;
+  onBook: (patient: Patient, slot: AvailabilitySlot) => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [patientId, setPatientId] = useState(
+    initialPatientId ?? (patients.length === 1 ? patients[0].id : ""),
+  );
+  const [slotId, setSlotId] = useState(initialSlot?.id ?? "");
+  const patient = patients.find((entry) => entry.id === patientId);
+  const slot = slots.find((entry) => entry.id === slotId);
+  const unavailable = offline || Boolean(slotId && !slot);
+  useEffect(() => {
+    dialog.current?.showModal();
+  }, []);
+  return (
+    <dialog
+      className="booking-dialog"
+      ref={dialog}
+      aria-labelledby="booking-title"
+      onCancel={(event) => {
+        event.preventDefault();
+        if (!working) onClose();
+      }}
+    >
+      <div className="booking-heading">
+        <h2 id="booking-title">Qabul belgilash</h2>
+        <button
+          className="icon-button"
+          aria-label="Yopish"
+          disabled={working}
+          onClick={onClose}
+        >
+          <X size={20} />
+        </button>
+      </div>
+      {initialSlot && (
+        <p className="booking-slot">
+          <strong>
+            {formatDate(initialSlot.start)} – {formatTime(initialSlot.end)}
+          </strong>
+          <span>
+            {doctorById[initialSlot.practitioner_id]} · {initialSlot.facility}
+          </span>
+        </p>
+      )}
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (patient && slot && !unavailable && !working)
+            onBook(patient, slot);
+        }}
+      >
+        {initialPatientId ? (
+          <strong>{patient?.name}</strong>
+        ) : (
+          <label className="booking-patient">
+            Bemor
+            <select
+              required
+              value={patientId}
+              disabled={working || !patients.length}
+              onChange={(event) => setPatientId(event.target.value)}
+            >
+              <option value="">Bemorni tanlang</option>
+              {patients.map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {entry.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {(!patients.length || (initialPatientId && !patient)) && (
+          <p>Qabul belgilash uchun yo‘llanma mavjud emas.</p>
+        )}
+        {!initialSlot && (
+          <label className="booking-patient">
+            Shifokor va qabul vaqti
+            <select
+              required
+              value={slot?.id ?? ""}
+              disabled={working}
+              onChange={(event) => setSlotId(event.target.value)}
+            >
+              <option value="">Bo‘sh vaqtni tanlang</option>
+              {Object.entries(doctorById).map(([id, name]) => (
+                <optgroup key={id} label={name}>
+                  {slots
+                    .filter((entry) => entry.practitioner_id === id)
+                    .map((entry) => (
+                      <option key={entry.id} value={entry.id}>
+                        {formatDate(entry.start)} · {entry.facility}
+                      </option>
+                    ))}
+                </optgroup>
+              ))}
+            </select>
+          </label>
+        )}
+        {patient && (
+          <>
+            <div className="booking-review">
+              <strong>{patient.reason}</strong>
+              <span>{patient.vitals.join(" · ")}</span>
+              <span>Mas’ul shifokor · {doctorNames[patient.doctor]}</span>
+            </div>
+            <CaseRationale
+              key={patient.id}
+              patient={patient}
+              offline={unavailable}
+              analysis={analyses?.[patient.id]}
+            />
+            <p>
+              Qabul saqlangach, AI sinov qo‘ng‘irog‘i avtomatik navbatga
+              qo‘yiladi.
+            </p>
+          </>
+        )}
+        {unavailable && (
+          <p role="status">
+            Bu vaqtni hozir saqlab bo‘lmaydi. Jadvalni tekshiring.
+          </p>
+        )}
+        {error && (
+          <p className="booking-error" role="alert">
+            {error}
+          </p>
+        )}
+        <button
+          className="button primary"
+          disabled={!patient || !slot || unavailable || working}
+          type="submit"
+        >
+          {working
+            ? "Saqlanmoqda…"
+            : patient && !patient.referralApprovedAt
+              ? "Yo‘llanmani tasdiqlash va qabulni saqlash"
+              : "Qabulni saqlash"}
+        </button>
+      </form>
+    </dialog>
+  );
+}
+
 function FacilityResponseForm({
-  disabled,
+  offline,
+  working,
+  slots,
   rescheduling,
   onSave,
 }: {
-  disabled: boolean;
+  offline: boolean;
+  working: boolean;
+  slots: AvailabilitySlot[];
   rescheduling: boolean;
   onSave: (response: FacilityResponse) => void;
 }) {
   const [mode, setMode] = useState<FacilityResponse["mode"]>("timed");
+  const [slotId, setSlotId] = useState("");
+  const slot =
+    mode === "timed" ? slots.find((entry) => entry.id === slotId) : undefined;
   return (
     <form
       className="detail-block facility-response"
       onSubmit={(event) => {
         event.preventDefault();
+        if (offline || working) return;
         const form = new FormData(event.currentTarget);
         const practitioner = String(form.get("practitioner") ?? "");
+        const manualTime = mode === "timed" && !slot;
         onSave({
           mode,
-          facility: String(form.get("facility") ?? "").trim(),
-          practitioner_id: practitioner || undefined,
-          start: mode === "timed" ? `${form.get("start")}+05:00` : undefined,
-          confirmed: mode === "timed" && form.get("confirmed") === "on",
+          slot_id: slot?.id,
+          facility: slot
+            ? undefined
+            : String(form.get("facility") ?? "").trim(),
+          practitioner_id: slot ? undefined : practitioner || undefined,
+          start: manualTime
+            ? `${form.get("date")}T${form.get("time")}+05:00`
+            : undefined,
+          confirmed: false,
         });
       }}
     >
@@ -1768,7 +1958,13 @@ function FacilityResponseForm({
           ? "Yangi qabul vaqtini qayd etish"
           : "Muassasa javobini qayd etish"}
       </h3>
-      <fieldset disabled={disabled}>
+      {offline && (
+        <p role="status">
+          Saqlash uchun mahalliy API’ga ulaning. Maydonlarni hozir ham
+          to‘ldirishingiz mumkin.
+        </p>
+      )}
+      <fieldset disabled={working}>
         <label>
           Tashrif turi
           <select
@@ -1781,38 +1977,64 @@ function FacilityResponseForm({
             <option value="untimed">Aniq vaqtsiz tashrif</option>
           </select>
         </label>
-        <label>
-          Qabul qiluvchi muassasa
-          <input name="facility" required maxLength={160} />
-        </label>
-        <label>
-          Qabul shifokori
-          <select
-            name="practitioner"
-            required={mode === "timed"}
-            defaultValue=""
-          >
-            <option value="">Shifokorni tanlang</option>
-            {Object.values(doctorNames).map((name, index) => (
-              <option key={name} value={`d${index + 1}`}>
-                {name}
-              </option>
-            ))}
-          </select>
-        </label>
-        {mode === "timed" && (
+        {mode === "timed" && slots.length > 0 && (
+          <label>
+            Namunaviy jadvaldan bo‘sh vaqt
+            <select
+              value={slot?.id ?? ""}
+              onChange={(event) => setSlotId(event.target.value)}
+            >
+              <option value="">Vaqtni qo‘lda kiriting</option>
+              {slots.map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {formatDate(entry.start)} ·{" "}
+                  {doctorById[entry.practitioner_id]} · {entry.facility}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {!slot && (
           <>
             <label>
-              Qabul vaqti (Toshkent)
-              <input name="start" type="datetime-local" required />
+              Qabul qiluvchi muassasa
+              <input name="facility" required maxLength={160} />
             </label>
-            <label className="facility-confirm">
-              <input name="confirmed" type="checkbox" /> Bemor vaqtni tasdiqladi
+            <label>
+              Qabul shifokori
+              <select
+                name="practitioner"
+                required={mode === "timed"}
+                defaultValue=""
+              >
+                <option value="">Shifokorni tanlang</option>
+                {Object.entries(doctorById).map(([id, name]) => (
+                  <option key={id} value={id}>
+                    {name}
+                  </option>
+                ))}
+              </select>
             </label>
+            {mode === "timed" && (
+              <div className="facility-time-fields">
+                <label>
+                  Qabul sanasi
+                  <input name="date" type="date" required />
+                </label>
+                <label>
+                  Qabul vaqti (Toshkent)
+                  <input name="time" type="time" required />
+                </label>
+              </div>
+            )}
           </>
         )}
-        <button type="submit" className="button primary">
-          Javobni saqlash
+        <button
+          type="submit"
+          className="button primary"
+          disabled={offline || working}
+        >
+          {working ? "Saqlanmoqda…" : "Javobni saqlash"}
         </button>
       </fieldset>
     </form>

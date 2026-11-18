@@ -4,7 +4,7 @@ export type Patient = {
   stage: string; clinic: string; zone: Zone; reason: string; vitals: string[];
   doctor: string; status: string; time: string;
   statusCode?: string; deadline?: string; updatedAt?: string; appointmentAt?: string; referralStatus?: string; referralApprovedAt?: string; urgentOutreachApprovedAt?: string; previousZone?: Zone; previousVitals?: string[]; observationVersion?: string;
-  motherId?: string; motherName?: string; phoneDisplay?: string; followUpAt?: string; followUpCompletedAt?: string; assessedAt?: string; assessedBy?: string;
+  motherId?: string; motherName?: string; followUpAt?: string; followUpCompletedAt?: string; assessedAt?: string; assessedBy?: string;
 };
 export type Doctor = { id: string; name: string; specialty: string; initials: string; role: string };
 export const doctors: Doctor[] = [

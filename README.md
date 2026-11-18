@@ -10,15 +10,15 @@ npm run build
 backend/.venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open http://127.0.0.1:8000. FastAPI serves the app and API from the same process. Case acceptance, reassignment, appointments and manual outreach outcomes persist in SQLite. Run an independent sample session with `DMED_DB=/path/to/sample.sqlite3` before starting the server.
+Open http://127.0.0.1:8000. FastAPI serves the app and API from the same process. Case acceptance, reassignment, appointments and call statuses persist in SQLite. Run an independent sample session with `DMED_DB=/path/to/sample.sqlite3` before starting the server.
 
-The private static site shows an explicitly read-only preview. Local mutations require the sample API. No live DMED connection or phone transport is configured. Staff can record the outcome of a sample contact; a reschedule request leaves the appointment time unchanged until a new time is agreed.
+The local background worker simulates calls. The call log shows the system's progress, and the visit stays pending until a confirmation is received. Live DMED and phone transport are disconnected.
 
 See [backend/README.md](backend/README.md) for the local API contract and limits. Use only sample data with this unauthenticated local service.
 
 ## Clinician review and appointments
 
-In the local sample workspace, open a yellow case from the bell or **Yo‘llanmalar**, switch to the assigned doctor's view, and approve the referral. Record the facility's response before creating a sample appointment or opening planned outreach. **Qabullar** filters by the clinician seeing the patient. The doctor selector is a demo view switch, not a login.
+Click **Qabul belgilash** on an eligible patient card or beside a free time in **Qabullar**. The same popup shows the patient, clinical evidence, assigned reviewer and selected time. Review and approve any pending referral in the popup, then save the appointment to queue the simulated AI call to the patient or to the baby's mother. The doctor selector switches between sample views.
 
 ## OpenRouter AI analyzer
 
