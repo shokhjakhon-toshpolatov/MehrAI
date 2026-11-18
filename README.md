@@ -2,6 +2,8 @@
 
 Perinatal registry and follow-up workflow using synthetic patient, clinician, and appointment records.
 
+[View the MehrAI presentation (PDF)](MehrAI%20Presentation.pdf)
+
 For one-click startup, open `run.py` and press your editor's **Run** button (or run `python run.py`). Install Python 3.10+ and Node.js first. The launcher installs dependencies on first use, builds the frontend, starts the local server, and opens your browser. Keep it running while using the app; press **Ctrl+C** to stop.
 
 Manual setup:

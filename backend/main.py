@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 from contextlib import asynccontextmanager, contextmanager
@@ -25,6 +26,7 @@ from .seed import PATIENTS, DOCTORS, POSTPARTUM_SAMPLE_ASSESSMENTS
 
 DB = os.getenv('DMED_DB', str(Path(__file__).with_name('demo.sqlite3')))
 TZ = ZoneInfo('Asia/Tashkent')
+logger = logging.getLogger(__name__)
 
 def now(): return datetime.now(timezone.utc)
 def stamp(dt=None): return (dt or now()).isoformat()
@@ -141,8 +143,8 @@ def ingest(db, patient_id, observation):
         if stored:
             assessment = json.loads(stored['payload'])
             risk.update(risk_zone=assessment['zone'], risk_reasons=[assessment['reason']])
-    key = hashlib.sha256(f"{patient_id}:{oid}:{risk['risk_zone']}".encode()).hexdigest()
-    duplicate = db.execute('SELECT case_id FROM idempotency WHERE key=?',(key,)).fetchone()
+    idempotency_key = hashlib.sha256(f"{patient_id}:{oid}:{risk['risk_zone']}".encode()).hexdigest()
+    duplicate = db.execute('SELECT case_id FROM idempotency WHERE key=?',(idempotency_key,)).fetchone()
     if duplicate: return get(db,'Case',duplicate['case_id'])[0]
     prior = next((row for row in all_of(db, 'Case') if row['id'] == patient_id), None)
     preserve_urgent = (
@@ -217,7 +219,7 @@ def ingest(db, patient_id, observation):
             case['status'] = 'POSTPARTUM_FOLLOWED_UP'
             case['follow_up_completed_at'] = prior['follow_up_completed_at']
     put(db,'Case',patient_id,case)
-    db.execute('INSERT INTO idempotency VALUES(?,?)',(key,patient_id))
+    db.execute('INSERT INTO idempotency VALUES(?,?)',(idempotency_key,patient_id))
     if preserve_visit and case.get('referral_approved_at') and case['status'] == 'VISIT_PROPOSED':
         prior_calls = all_of(db, 'Call')
         if not any(task.get('appointment_id') == case['appointment_id']
@@ -400,10 +402,13 @@ def process_due(db):
 
 async def worker():
     while True:
-        with connect() as db:
-            db.execute('BEGIN IMMEDIATE')
-            process_due(db)
-            advance_demo_feed(db)
+        for operation in (process_due, advance_demo_feed):
+            try:
+                with connect() as db:
+                    db.execute('BEGIN IMMEDIATE')
+                    operation(db)
+            except Exception:
+                logger.exception('Background operation failed: %s', operation.__name__)
         await asyncio.sleep(1)
 
 async def track_handset_calls():
@@ -454,6 +459,8 @@ def registry():
         runs = all_of(db, 'DemoRun')
         stream = runs[-1] if runs else None
         if stream:
+            if stream['status'] == 'STREAMING' and now() > datetime.fromisoformat(stream['next_at']) + timedelta(seconds=15):
+                stream['status'] = 'STALLED'
             for event in stream['events']:
                 job = jobs[event['id']]
                 event['analysis_status'] = job['status']
@@ -472,12 +479,18 @@ def registry():
 
 
 @app.post('/api/simulation/start')
-def start_demo_stream():
+def start_demo_stream(restart_run_id: str | None = None):
     with connect() as db:
         db.execute('BEGIN IMMEDIATE')
         runs = all_of(db, 'DemoRun')
-        if runs and runs[-1]['status'] == 'STREAMING':
-            return runs[-1]
+        if runs:
+            current = runs[-1]
+            if current['id'] != restart_run_id:
+                if restart_run_id is not None or current['status'] == 'STREAMING':
+                    return current
+            elif current['status'] == 'STREAMING':
+                current['status'] = 'SUPERSEDED'
+                put(db, 'DemoRun', current['id'], current)
         run = {
             'id': str(uuid4()), 'status': 'STREAMING', 'total': len(OBSERVATION_FEED),
             'next_at': stamp(now() + timedelta(seconds=1)), 'events': [],
@@ -921,15 +934,22 @@ def apply_appointment_outcome(db, case, outcome):
             raise HTTPException(409, 'Qabul vaqti o‘tgan')
         visit['status'] = 'booked'
         case['status'] = 'PATIENT_CONFIRMED'
-    else:
+    elif outcome == 'RESCHEDULE_REQUESTED':
         visit['status'] = 'reschedule_requested'
         case.update(status='REFERRED', referral_status='RESCHEDULE_REQUESTED', appointment_time=None)
+    else:
+        visit['status'] = 'cancelled'
+        case.update(status='PATIENT_DECLINED', referral_status='PATIENT_DECLINED', appointment_time=None)
+        case.pop('appointment_id', None)
     put(db, 'Appointment', visit['id'], visit, version + 1)
-    case['appointment_etag'] = f'W/"{version + 1}"'
+    if case.get('appointment_id'):
+        case['appointment_etag'] = f'W/"{version + 1}"'
+    else:
+        case.pop('appointment_etag', None)
     put(db, 'Case', case['id'], case)
 
 class OutreachOutcome(BaseModel):
-    outcome: Literal['REACHED', 'CONFIRMED', 'RESCHEDULE_REQUESTED', 'NO_ANSWER']
+    outcome: Literal['REACHED', 'CONFIRMED', 'DECLINED', 'RESCHEDULE_REQUESTED', 'NO_ANSWER']
     attempt_id: str
     duration_seconds: int | None = Field(default=None, ge=0, le=86400)
     channel: Literal['doctor', 'ai_demo'] = 'doctor'
@@ -952,7 +972,7 @@ def record_outreach(call_id: str, attempt: OutreachOutcome):
             raise HTTPException(409, 'Aloqa vazifasi yakunlangan')
         if call.get('case_version') and call['case_version'] != case['created_at']:
             raise HTTPException(409, 'Yangi kuzatuv kiritilgan. Joriy aloqa vazifasini oching.')
-        if attempt.outcome in ('CONFIRMED', 'RESCHEDULE_REQUESTED'):
+        if attempt.outcome in ('CONFIRMED', 'DECLINED', 'RESCHEDULE_REQUESTED'):
             if call.get('appointment_id') != case.get('appointment_id'):
                 raise HTTPException(409, 'Bu aloqa vazifasi joriy qabulga tegishli emas')
             apply_appointment_outcome(db, case, attempt.outcome)
@@ -981,7 +1001,7 @@ class VoiceEvent(BaseModel):
 
 @app.post('/webhooks/voicelab/status')
 def voice_event(event:VoiceEvent):
-    if event.intent not in ('CONFIRMED','RESCHEDULE_REQUESTED','NO_ANSWER'): raise HTTPException(422,'Unknown intent')
+    if event.intent not in ('CONFIRMED','DECLINED','RESCHEDULE_REQUESTED','NO_ANSWER'): raise HTTPException(422,'Unknown intent')
     with connect() as db:
         db.execute('BEGIN IMMEDIATE')
         case,_=get(db,'Case',event.case_id)
@@ -990,16 +1010,17 @@ def voice_event(event:VoiceEvent):
         if case['risk_zone'] == 'RED':
             raise HTTPException(409, 'Shoshilinch holat uchun rejali aloqa natijasi qabul qilinmaydi')
         require_planned_contact_approval(case)
-        if event.intent in ('CONFIRMED','RESCHEDULE_REQUESTED'):
+        appointment_id = case.get('appointment_id')
+        if event.intent in ('CONFIRMED','DECLINED','RESCHEDULE_REQUESTED'):
             apply_appointment_outcome(db, case, event.intent)
         else:
             case['unanswered_attempts']=case.get('unanswered_attempts',0)+1
             if case['unanswered_attempts']>=2: case.update(nurse_notified=True,family_contact_queued=True)
-        if case.get('appointment_id'):
+        if appointment_id:
             calls = all_of(db, 'Call')
             call = next((task for task in reversed(calls)
                          if task['case_id'] == case['id']
-                         and task.get('appointment_id') == case['appointment_id']
+                         and task.get('appointment_id') == appointment_id
                          and task.get('case_version') == case['created_at']
                          and task['status'] != 'SUPERSEDED'), None)
             if call:

@@ -81,7 +81,6 @@ export default function Dashboard() {
   const [risk, setRisk] = useState("ALL");
   const [selected, setSelected] = useState<Patient | null>(null);
   const [sim, setSim] = useState(false);
-  const [showDemoRun, setShowDemoRun] = useState(false);
   const [toast, setToast] = useState("");
   const [tab, showTab] = useState("overview");
   const tabHistory = useRef<string[]>([]);
@@ -173,12 +172,18 @@ export default function Dashboard() {
     false;
   const fastRefresh = demoCallActive || streamActive;
   useEffect(() => {
-    void refresh();
-    const sync = setInterval(refresh, fastRefresh ? 1000 : 15000);
+    let stopped = false;
+    let sync: ReturnType<typeof setTimeout>;
+    async function poll() {
+      await refresh();
+      if (!stopped) sync = setTimeout(poll, fastRefresh ? 1000 : 15000);
+    }
+    void poll();
     const tick = setInterval(() => setClock(Date.now()), 1000);
     return () => {
+      stopped = true;
       ++requestVersion.current;
-      clearInterval(sync);
+      clearTimeout(sync);
       clearInterval(tick);
     };
   }, [refresh, fastRefresh]);
@@ -215,8 +220,7 @@ export default function Dashboard() {
   };
   const runStreamDemo = () =>
     save(async () => {
-      await startDemoStream();
-      setShowDemoRun(true);
+      await startDemoStream(data?.demoStream?.id);
       setSim(false);
       setSelected(null);
       setPersona("district");
@@ -297,9 +301,8 @@ export default function Dashboard() {
     task: Outreach,
     outcome: OutreachOutcome,
     attemptId: string,
-    duration?: number,
   ) => save(async () => {
-    await recordOutcome(task.id, outcome, attemptId, { duration_seconds: duration, started_at: dialStart.current[task.patientId] });
+    await recordOutcome(task.id, outcome, attemptId, { started_at: dialStart.current[task.patientId] });
     delete dialStart.current[task.patientId];
   });
   const dialStart = useRef<Record<string, string>>({});
@@ -502,10 +505,10 @@ export default function Dashboard() {
               </h1>
               <p>{t("O‘z vaqtida e’tibor. Uzluksiz kuzatuv. Sog‘lom kelajak.")}</p>
             </div>
-            <div className="intro-actions">
+            {persona === "district" && <div className="intro-actions">
               <button className="button" onClick={() => setSim(true)}>
                 <Zap size={16} />{t("Demo simulyator")}</button>
-            </div>
+            </div>}
           </div>
           <div className="context-bar">
             <div>
@@ -536,10 +539,11 @@ export default function Dashboard() {
               ? t("Server ulanmagan · saqlash va ma’lumotlar oqimi uchun mahalliy API’ni ishga tushiring.")
               : t("Server ulangan · sun’iy ma’lumotlar")}
           </div>
-          {tab === "overview" && (
+          {tab === "overview" && persona === "district" && (
             <ObservationFeed
-              stream={showDemoRun || streamActive ? data?.demoStream : null}
+              stream={data?.demoStream}
               active={streamActive}
+              offline={offline}
               disabled={offline || working}
               onStart={runStreamDemo}
               onOpen={(id) => {
@@ -1028,9 +1032,11 @@ export default function Dashboard() {
                   <p>{t("AI qo‘ng‘iroqlari va tizim qayd etgan holatlar")}</p>
                 </div>
               </div>
-              <CallHistory entries={history} patients={scoped} onSelect={setSelected} />
-              <ConnectionCheck />
-              <HandsetTest onUpdate={refresh} />
+              {persona === "district" && <>
+                <CallHistory entries={history} patients={scoped} onSelect={setSelected} />
+                <ConnectionCheck />
+                <HandsetTest onUpdate={refresh} />
+              </>}
               {!calls.length && (
                 <p className="workflow-empty">
                   {data
@@ -1260,10 +1266,10 @@ export default function Dashboard() {
                   <ShieldCheck size={18} />{t("Sun’iy bemorlar. Haqiqiy tibbiy harakatlar bajarilmaydi.")}</div>
                 <button
                   className="button primary demo-stream-start"
-                  disabled={offline || working || streamActive}
+                  disabled={offline || working}
                   onClick={runStreamDemo}
                 >
-                  <Activity size={17} />{t(" Ma’lumotlar oqimini boshlash")}</button>
+                  <Activity size={17} />{t(data?.demoStream ? "Oqimni qayta boshlash" : "Ma’lumotlar oqimini boshlash")}</button>
                 <p className="drawer-intro">{t("Sinov IT-MED API · 4 ta namunaviy kuzatuv ketma-ket keladi.")}</p>
                 {[
                   {
@@ -1476,13 +1482,7 @@ export default function Dashboard() {
                   )}
                   <div className="detail-block patient-contact">
                     <h3>
-                      <Phone size={16} />{t(" AI qo‘ng‘irog‘i")}</h3>
-                    <p>{t("Aloqa oluvchi:")}{" "}
-                      {t(latestCall?.target ??
-                        (selected.cohort === "NEONATAL"
-                          ? t("Chaqaloqning onasi")
-                          : "Bemor"))}
-                    </p>
+                      <Phone size={16} />{t("Bemor bilan bog‘lanish")}</h3>
                     {selected.cohort === "NEONATAL" && (
                       <p>{t("Onasi:")}{" "}
                         <strong>
@@ -1492,23 +1492,25 @@ export default function Dashboard() {
                         </strong>
                       </p>
                     )}
-                    {latestCall && (
-                      <p role="status">
-                        <strong>{t(latestCall.statusLabel)}</strong>
-                      </p>
-                    )}
                     <PhoneActions key={selected.id + (selected.contactPhone ?? "")} patient={selected} disabled={offline || working} save={save}
-                      manualContactAllowed={selected.zone !== "RED" && selected.zone !== "YELLOW"}
+                      canEditPhone={persona === "district"}
+                      demoAllowed={persona === "district" && selected.zone !== "RED" && selected.zone !== "YELLOW"}
                       onDial={() => { dialStart.current[selected.id] = new Date().toISOString(); if (!activeContact && selected.zone !== "RED" && selected.zone !== "YELLOW") void save(() => openContact(selected.id)); }}
                       onDemo={outcome => save(async () => {
                         const task = await openContact(selected.id);
-                        await recordOutcome(task.id, outcome, crypto.randomUUID(), { channel: "ai_demo", duration_seconds: outcome === "REACHED" ? 30 : undefined });
+                        await recordOutcome(task.id, outcome, crypto.randomUUID(), { channel: "ai_demo" });
                       })} />
-                    {selected.contactPhone && <HandsetTest patientId={selected.id} onUpdate={refresh} />}
-                    <CallHistory entries={(data?.history ?? []).filter(item => item.case_id === selected.id)} patients={patients} />
-                    {selectedTasks.length > 0 && (
-                      <p>{t("So‘nggi natija: ")}{t(selectedTasks.at(-1)?.statusLabel)}</p>
+                    {persona === "district" && selected.contactPhone && <HandsetTest patientId={selected.id} onUpdate={refresh} />}
+                    {latestCall && (
+                      <p role="status">
+                        {persona === "district" && <>
+                          {t(latestCall.simulated ? "AI qo‘ng‘irog‘i (demo)" : "So‘nggi natija")}
+                          {" · "}{t(latestCall.target)}{" · "}
+                        </>}
+                        <strong>{t(latestCall.statusLabel)}</strong>
+                      </p>
                     )}
+                    {persona === "district" && <CallHistory entries={(data?.history ?? []).filter(item => item.case_id === selected.id)} patients={patients} />}
                     {activeContact ? (
                       <ContactOutcomeForm
                         key={activeContact.id}
@@ -1532,7 +1534,7 @@ export default function Dashboard() {
                         }
                       >{t("Aloqa vazifasini ochish ")}</button>
                     ) : null}
-                    {(selected.zone === "YELLOW" || canBookUrgent) &&
+                    {persona === "district" && (selected.zone === "YELLOW" || canBookUrgent) &&
                       !selectedVisit &&
                       !latestCall && (
                         <p>{t("Sinov qo‘ng‘irog‘ida qabul sanasi va vaqti ko‘rsatiladi. Haqiqiy telefon raqami terilmaydi.")}</p>
@@ -1614,12 +1616,14 @@ export default function Dashboard() {
 function ObservationFeed({
   stream,
   active,
+  offline,
   disabled,
   onStart,
   onOpen,
 }: {
   stream?: DemoStream | null;
   active: boolean;
+  offline: boolean;
   disabled: boolean;
   onStart: () => void;
   onOpen: (id: string) => void;
@@ -1635,15 +1639,11 @@ function ObservationFeed({
         </div>
         <button
           className="button primary demo-feed-start"
-          disabled={disabled || active}
+          disabled={disabled}
           onClick={onStart}
         >
           <Zap size={16} />{" "}
-          {active
-            ? t("Oqim davom etmoqda")
-            : stream
-              ? t("Oqimni qayta boshlash")
-              : t("Ma’lumotlar oqimini boshlash")}
+          {t(stream ? "Oqimni qayta boshlash" : "Ma’lumotlar oqimini boshlash")}
         </button>
       </div>
       {stream && (
@@ -1655,13 +1655,14 @@ function ObservationFeed({
           />
           <span>
             {stream.events.length}/{stream.total}{t(" kuzatuv ·")}{" "}
-            {active ? t("Jarayon davom etmoqda") : t("Yakunlandi")}
+            {t(offline ? "Server bilan aloqa uzildi" : stream.status === "STALLED"
+              ? "Oqim to‘xtab qoldi" : active ? "Jarayon davom etmoqda" : "Yakunlandi")}
           </span>
         </div>
       )}
       {!stream?.events.length && (
         <p className="demo-feed-empty">
-          {stream ? t("Birinchi kuzatuv kutilmoqda…") : t("Hali kuzatuv kelmagan.")}
+          {stream?.status === "STREAMING" && !offline ? t("Birinchi kuzatuv kutilmoqda…") : t("Hali kuzatuv kelmagan.")}
         </p>
       )}
       <div className="demo-feed-events">
@@ -1750,25 +1751,44 @@ function ObservationFeed({
   );
 }
 
-function PhoneActions({ patient, disabled, save, onDial, onDemo, manualContactAllowed }: {
+function PhoneActions({ patient, disabled, save, onDial, onDemo, canEditPhone, demoAllowed }: {
   patient: Patient; disabled: boolean;
   save: (action: () => Promise<unknown>) => Promise<void>;
   onDial: () => void; onDemo: (outcome: "REACHED" | "NO_ANSWER") => void;
-  manualContactAllowed: boolean;
+  canEditPhone: boolean;
+  demoAllowed: boolean;
 }) {
   const { t } = useLanguage();
   const [phone, setPhone] = useState(patient.contactPhone ?? "");
   const [demoOpen, setDemoOpen] = useState(false);
+  const contactPhone = /^[0-9]{9}$/.test(phone) ? `+998${phone}` : phone;
+  const canDial = Boolean(patient.contactPhone && !disabled);
+  if (!canEditPhone && !canDial && !demoAllowed) return null;
+
   return <div className="phone-actions">
-    <form onSubmit={event => { event.preventDefault(); void save(() => savePhone(patient.id, phone)); }}>
-      <label>{t("Aloqa raqami")}<input type="tel" value={phone} pattern="[+][1-9][0-9]{7,14}" placeholder="+998…" onChange={e => setPhone(e.target.value.replace(/[\s()-]/g, ""))} /></label>
-      <button className="button" disabled={disabled || phone === (patient.contactPhone ?? "")}>{t("Saqlash")}</button>
-    </form>
-    <div className="button-row">
-      {patient.contactPhone && !disabled && <a className="button" href={`tel:${patient.contactPhone}`} onClick={onDial}><Phone size={15}/>{t("O‘zim qo‘ng‘iroq qilaman")}</a>}
-      {manualContactAllowed && <button className="button" disabled={disabled} aria-expanded={demoOpen} onClick={() => setDemoOpen(!demoOpen)}>{t("AI qo‘ng‘irog‘i (demo)")}</button>}
-    </div>
-    {demoOpen && <div><p>{t("Sinov natijasini tanlang. Telefon raqami terilmaydi.")}</p>
+    {canEditPhone && <form onSubmit={event => {
+      event.preventDefault();
+      if (!disabled && contactPhone !== (patient.contactPhone ?? "")) {
+        void save(() => savePhone(patient.id, contactPhone));
+      }
+    }}>
+      <label>
+        {t(patient.cohort === "NEONATAL" ? "Onasining telefon raqami" : "Bemorning telefon raqami")}
+        <input
+          type="tel"
+          value={phone}
+          pattern="(?:[0-9]{9}|[+][1-9][0-9]{7,14})"
+          placeholder="+998 XX XXX XX XX"
+          onChange={e => setPhone(e.target.value.replace(/[\s()-]/g, ""))}
+        />
+      </label>
+      <button className="button" disabled={disabled || contactPhone === (patient.contactPhone ?? "")}>{t("Saqlash")}</button>
+    </form>}
+    {(canDial || demoAllowed) && <div className="button-row">
+      {canDial && <a className="button" href={`tel:${patient.contactPhone}`} onClick={onDial}><Phone size={15}/>{t("O‘zim qo‘ng‘iroq qilaman")}</a>}
+      {demoAllowed && <button className="button" disabled={disabled} aria-expanded={demoOpen} onClick={() => setDemoOpen(!demoOpen)}>{t("AI qo‘ng‘irog‘i (demo)")}</button>}
+    </div>}
+    {demoAllowed && demoOpen && <div><p>{t("Sinov natijasini tanlang. Telefon raqami terilmaydi.")}</p>
       <div className="button-row">{(["REACHED", "NO_ANSWER"] as const).map(outcome =>
         <button className="button" key={outcome} disabled={disabled} onClick={() => { setDemoOpen(false); onDemo(outcome); }}>{t(outcome === "REACHED" ? "Bog‘lanildi" : "Javob yo‘q")}</button>)}</div>
     </div>}
@@ -1796,7 +1816,8 @@ const connectionLabels = {
   IN_PROGRESS: "Aloqa o‘rnatildi", COMPLETED: "Yakunlandi", BUSY: "Raqam band", FAILED: "Ulanmadi",
   CANCELLED: "Bekor qilindi", CONFIG_ERROR: "Ovoz yoki hisob sozlamalarini tekshiring",
   REJECTED: "Operator qo‘ng‘iroqni rad etdi", UNKNOWN: "Natija noma’lum — operator jurnalini tekshiring",
-  REACHED: "Bog‘lanildi", CONFIRMED: "Qabul tasdiqlandi", RESCHEDULE_REQUESTED: "Boshqa vaqt so‘raldi", NO_ANSWER: "Javob yo‘q",
+  REACHED: "Bog‘lanildi", CONFIRMED: "Qabul tasdiqlandi", DECLINED: "Bemor qabulga kelmaydi",
+  RESCHEDULE_REQUESTED: "Boshqa vaqt so‘raldi", NO_ANSWER: "Javob yo‘q",
 };
 
 function HandsetTest({patientId, onUpdate}: {patientId?: string; onUpdate: () => Promise<void>}) {
@@ -1866,7 +1887,7 @@ function ContactOutcomeForm({
   task: Outreach;
   timed: boolean;
   disabled: boolean;
-  onSave: (task: Outreach, outcome: OutreachOutcome, attemptId: string, duration?: number) => void;
+  onSave: (task: Outreach, outcome: OutreachOutcome, attemptId: string) => void;
 }) {
   const { t } = useLanguage();
   const attempt = useRef<{
@@ -1892,8 +1913,7 @@ function ContactOutcomeForm({
             id: globalThis.crypto.randomUUID(),
           };
         }
-        const duration = new FormData(e.currentTarget).get("duration");
-        onSave(task, outcome, attempt.current.id, duration ? Number(duration) : undefined);
+        onSave(task, outcome, attempt.current.id);
       }}
     >
       <select
@@ -1904,16 +1924,15 @@ function ContactOutcomeForm({
         disabled={disabled}
       >
         <option value="" disabled>{t("Natijani tanlang ")}</option>
-        <option value="REACHED">{t("Bog‘lanildi")}</option>
-        {timed && (
+        {timed ? (
           <>
-            <option value="CONFIRMED">{t("Qabul tasdiqlandi")}</option>
+            <option value="CONFIRMED">{t("Bemor qabulga keladi")}</option>
+            <option value="DECLINED">{t("Bemor qabulga kelmaydi")}</option>
             <option value="RESCHEDULE_REQUESTED">{t("Boshqa vaqt so‘raldi")}</option>
           </>
-        )}
+        ) : <option value="REACHED">{t("Bog‘lanildi")}</option>}
         <option value="NO_ANSWER">{t("Javob yo‘q")}</option>
       </select>
-      <input type="number" name="duration" min="0" max="86400" placeholder={t("Davomiyligi (soniya)")} aria-label={t("Davomiyligi (soniya)")} disabled={disabled} />
       <button className="button" disabled={disabled}>{t("Qayd etish ")}</button>
     </form>
   );

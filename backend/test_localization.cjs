@@ -166,6 +166,23 @@ function render(Component, props) {
   return require('react-dom/server').renderToStaticMarkup(require('react').createElement(Component, props));
 }
 
+test('doctor patient cards use the number on file without offering phone editing', () => {
+  const patient = localizedModule('lib/demo.ts', 'uz').seedPatients[0];
+  const contactPhone = '+12025550100';
+  const withPhone = { ...patient, contactPhone };
+  const renderCard = (selected, persona) => render(localizedModule('app/page.tsx', 'uz', {
+    selected, patients: [selected], persona, offline: false,
+  }).default);
+
+  const doctorCard = renderCard(withPhone, patient.doctor);
+  assert.doesNotMatch(doctorCard, /type="tel"/);
+  assert.match(doctorCard, /href="tel:\+12025550100"/);
+
+  const noPhoneCard = renderCard(patient, patient.doctor);
+  assert.doesNotMatch(noPhoneCard, /type="tel"|href="tel:/);
+  assert.match(renderCard(withPhone, 'district'), /type="tel"/);
+});
+
 function assertRussian(html) {
   const visible = html.replace(/<[^>]*>/g, ' ');
   assert.doesNotMatch(visible, /Yo\?llanmalar|Yo‘llan|Qabul|Shifokor|kutilmo|ko‘rik|Ma’lumot|Avvalgi|Yangi o‘lchov|Bilirubin|Harorat|Kamqonlik|Namuna|Saqlanmo|Toshkent vaqti|Bemor|Dr\./);

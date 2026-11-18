@@ -154,6 +154,17 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
         self.assertEqual(self.client.get(f"/dmed/v2/Appointment/{visit['id']}").json()['status'], 'cancelled')
 
+    def test_patient_declining_cancels_current_visit_and_records_outcome(self):
+        visit = self.facility_visit()
+        payload = {'case_id': 'p2', 'intent': 'DECLINED', 'event_id': 'declined'}
+        for _ in range(2):
+            case = self.client.post('/webhooks/voicelab/status', json=payload).json()
+            self.assertEqual(case['status'], 'PATIENT_DECLINED')
+            self.assertNotIn('appointment_id', case)
+        self.assertEqual(self.client.get(f"/dmed/v2/Appointment/{visit['id']}").json()['status'], 'cancelled')
+        calls = self.client.get('/api/registry').json()['calls']
+        self.assertEqual(next(call['status'] for call in calls if call.get('appointment_id') == visit['id']), 'DECLINED')
+
     def test_untimed_visit_has_no_slot_and_can_record_attendance(self):
         visit = self.facility_visit('p4', mode='untimed')
         self.assertNotIn('start', visit)
@@ -379,6 +390,30 @@ class BackendTests(unittest.TestCase):
         last = data['demo_stream']['events'][-1]
         self.assertEqual(last['previous_observation']['bilirubin'], 238)
         self.assertEqual(last['observation']['bilirubin'], 295)
+
+    def test_stalled_stream_can_restart_with_existing_appointment(self):
+        visit = self.facility_visit()
+        original = self.client.post('/api/simulation/start').json()
+        start = main.now() + timedelta(seconds=20)
+        with patch.object(main, 'now', return_value=start):
+            self.assertEqual(self.client.get('/api/registry').json()['demo_stream']['status'], 'STALLED')
+            url = f"/api/simulation/start?restart_run_id={original['id']}"
+            replacement = self.client.post(url).json()
+            self.assertNotEqual(replacement['id'], original['id'])
+            self.assertEqual(self.client.post(url).json()['id'], replacement['id'])
+
+        with main.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            for index in range(replacement['total']):
+                with patch.object(main, 'now', return_value=start + timedelta(seconds=2 + index * 4)):
+                    main.advance_demo_feed(db)
+            run, _ = main.get(db, 'DemoRun', replacement['id'])
+            self.assertEqual(run['status'], 'COMPLETE')
+            p2_event = next(event for event in run['events'] if event['patient_id'] == 'p2')
+            observation, _ = main.get(db, 'Observation', p2_event['id'])
+            case = main.ingest(db, 'p2', observation)
+            self.assertEqual(case['appointment_id'], visit['id'])
+            self.assertEqual(case['demo_analysis_id'], p2_event['id'])
 
     def test_registry_display_explains_findings_in_uzbek_using_recorded_values(self):
         cases = {case['id']: case for case in self.client.get('/api/registry').json()['cases']}

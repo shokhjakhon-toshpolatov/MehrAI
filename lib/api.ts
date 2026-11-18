@@ -32,7 +32,7 @@ export type Appointment = {
   facility?: string;
 };
 export type OutreachOutcome =
-  "REACHED" | "CONFIRMED" | "RESCHEDULE_REQUESTED" | "NO_ANSWER";
+  "REACHED" | "CONFIRMED" | "DECLINED" | "RESCHEDULE_REQUESTED" | "NO_ANSWER";
 export type ContactAttempt = {
   id: string; case_id: string | null; call_id: string; channel: "doctor" | "ai_demo" | "live_test";
   outcome: OutreachOutcome | "SUBMITTING" | "QUEUED" | "RINGING" | "IN_PROGRESS" | "COMPLETED" | "BUSY" | "FAILED" | "CANCELLED" | "CONFIG_ERROR" | "REJECTED" | "UNKNOWN";
@@ -66,7 +66,7 @@ export type DemoEvent = {
 };
 export type DemoStream = {
   id: string;
-  status: "STREAMING" | "COMPLETE";
+  status: "STREAMING" | "COMPLETE" | "STALLED";
   total: number;
   events: DemoEvent[];
 };
@@ -152,6 +152,7 @@ const doctorIds: Record<string, string> = {
   d4: "alimov",
 };
 const statuses: Record<string, string> = {
+  PATIENT_DECLINED: "Bemor qabulga kelmaydi",
   ROUTINE: "Rejali kuzatuv",
   POSTPARTUM_FOLLOW_UP: "Kuzatuv kutilmoqda",
   POSTPARTUM_FOLLOWED_UP: "Kuzatuv qayd etildi",
@@ -180,6 +181,7 @@ const callStatuses: Record<string, string> = {
   DEMO_CALL_COMPLETE: "AI sinov qo‘ng‘irog‘i yakunlandi",
   READY: "Qo‘ng‘iroqqa tayyor",
   CONFIRMED: "Tasdiqlangan",
+  DECLINED: "Bemor qabulga kelmaydi",
   RESCHEDULE_REQUESTED: "Boshqa vaqt so‘ralgan",
   NO_ANSWER: "Javob olinmagan",
   REACHED: "Bog‘lanildi",
@@ -495,6 +497,7 @@ export function bookUrgentVisit(
   );
 }
 
-export function startDemoStream() {
-  return request<DemoStream>("/api/simulation/start", "POST");
+export function startDemoStream(restartRunId?: string) {
+  const query = restartRunId ? `?restart_run_id=${encodeURIComponent(restartRunId)}` : "";
+  return request<DemoStream>(`/api/simulation/start${query}`, "POST");
 }
