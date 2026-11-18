@@ -2,6 +2,12 @@
 import math
 
 def evaluate(cohort: str, o: dict) -> dict:
+    if cohort == 'POSTPARTUM':
+        return {
+            'risk_zone': 'REVIEW',
+            'required_specialty': 'OBGYN',
+            'risk_reasons': ['Tug‘ruqdan keyingi ko‘rikni mutaxassis baholaydi'],
+        }
     red, yellow, missing = [], [], []
     specialty = 'OBGYN' if cohort == 'MATERNAL' else 'NEONATOLOGY'
     def value(key):

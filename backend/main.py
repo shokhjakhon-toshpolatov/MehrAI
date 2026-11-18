@@ -55,7 +55,9 @@ def init():
     with connect() as db:
         db.execute('CREATE TABLE IF NOT EXISTS resources(kind TEXT,id TEXT,payload TEXT,version INTEGER,PRIMARY KEY(kind,id))')
         db.execute('CREATE TABLE IF NOT EXISTS idempotency(key TEXT PRIMARY KEY, case_id TEXT)')
-        if all_of(db,'Patient'):
+        db.execute('BEGIN IMMEDIATE')
+        existing = {p['id']: p for p in all_of(db, 'Patient')}
+        if existing:
             for kind in ('Patient', 'RelatedPerson'):
                 for record in all_of(db, kind):
                     if record.get('telecom'):
@@ -63,13 +65,28 @@ def init():
                         record['telecom'] = []
                         put(db, kind, record['id'], record, version + 1)
             retire_legacy_slots(db)
-            return
-        for d in DOCTORS: put(db,'PractitionerRole',d['id'],d)
-        for p in PATIENTS:
-            put(db,'Patient',p['id'],p)
-            put(db,'DispensaryRegistration',p['id'],{'id':p['id'],'patient':p['id'],'organization':p['clinic']})
-            put(db,'RelatedPerson',f"family-{p['id']}",{'id':f"family-{p['id']}",'patient':p['id'],'name':p.get('mother_name','Family contact'),'telecom':[]})
-            ingest(db,p['id'],{'id':f"seed-{p['id']}",**p['observation']})
+        else:
+            for doctor in DOCTORS:
+                put(db, 'PractitionerRole', doctor['id'], doctor)
+        for sample in PATIENTS:
+            patient_id = sample['id']
+            if patient_id not in existing:
+                put(db, 'Patient', patient_id, dict(sample))
+                put(db, 'DispensaryRegistration', patient_id, {
+                    'id': patient_id, 'patient': patient_id, 'organization': sample['clinic'],
+                })
+                family_id = f'family-{patient_id}'
+                put(db, 'RelatedPerson', family_id, {
+                    'id': family_id, 'patient': patient_id,
+                    'name': sample.get('mother_name', 'Family contact'), 'telecom': [],
+                })
+                ingest(db, patient_id, {'id': f'seed-{patient_id}', **sample['observation']})
+            elif sample.get('mother_id'):
+                patient, version = get(db, 'Patient', patient_id)
+                if not patient.get('mother_id'):
+                    patient['mother_id'] = sample['mother_id']
+                    put(db, 'Patient', patient_id, patient, version + 1)
+
 
 def retire_legacy_slots(db):
     """Move generated sample slots back to the referral queue."""
@@ -134,6 +151,12 @@ def ingest(db, patient_id, observation):
             put(db,'ServiceRequest',sid,{'id':sid,'patient':patient_id,'practitioner':doctor['id'],'status':'active','specialty':specialty})
             case['service_request_id']=sid
         else: case['status']='UNASSIGNED_REVIEW'
+    if patient['cohort_type'] == 'POSTPARTUM':
+        case['status'] = 'POSTPARTUM_FOLLOW_UP'
+        case['follow_up_at'] = (prior or {}).get('follow_up_at') or stamp(now() + timedelta(days=1))
+        if prior and prior.get('follow_up_completed_at'):
+            case['status'] = 'POSTPARTUM_FOLLOWED_UP'
+            case['follow_up_completed_at'] = prior['follow_up_completed_at']
     put(db,'Case',patient_id,case)
     db.execute('INSERT INTO idempotency VALUES(?,?)',(key,patient_id))
     if risk['risk_zone'] == 'RED' or (preserve_visit and case['status'] == 'VISIT_PROPOSED'):
@@ -235,6 +258,15 @@ def case_action(case_id:str,action:str):
             result=escalate(db,case)
             audit(db,case_id,'busy','Case handed over; notification transport is simulated')
             return result
+        if action == 'postpartum-follow-up':
+            if case['cohort_type'] != 'POSTPARTUM':
+                raise HTTPException(409, 'Bu tug‘ruqdan keyingi kuzatuv yozuvi emas')
+            if case.get('follow_up_completed_at'):
+                return case
+            case.update(status='POSTPARTUM_FOLLOWED_UP', follow_up_completed_at=stamp())
+            put(db, 'Case', case_id, case)
+            audit(db, case_id, 'postpartum_follow_up', 'Staff recorded the postpartum follow-up')
+            return case
         if action == 'call':
             for task in all_of(db, 'Call'):
                 if (task['case_id'] == case_id and task.get('case_version') == case['created_at']

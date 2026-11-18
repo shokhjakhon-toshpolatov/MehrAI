@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { ArrowDownToLine, ArrowUpDown, Baby, ChevronRight, CircleCheck, Clock3, Search, SlidersHorizontal, UsersRound } from 'lucide-react';
+import { ArrowDownToLine, ArrowUpDown, Baby, ChevronRight, HeartPulse, CircleCheck, Clock3, Search, SlidersHorizontal, UsersRound } from 'lucide-react';
 import { doctors, Patient, zoneLabels } from '../lib/demo';
 
 type Props = {
@@ -37,7 +37,7 @@ export default function Registry({ patients, onSelect, persona, riskFilter, onRi
       <button className="button button-secondary export-button" onClick={exportCSV}><ArrowDownToLine size={16} /> Eksport</button>
     </div>
     <div className="registry-tabs" role="tablist" aria-label="Bemorlar guruhi">
-      {[{ id: 'ALL', label: 'Barchasi', icon: UsersRound }, { id: 'MATERNAL', label: 'Homilador ayollar', icon: UsersRound }, { id: 'NEONATAL', label: 'Chaqaloqlar', icon: Baby }].map(tab => <button key={tab.id} role="tab" aria-selected={cohort === tab.id} className={`registry-tab ${cohort === tab.id ? 'active' : ''}`} onClick={() => setCohort(tab.id)}><tab.icon size={16} />{tab.label}<span>{scope.filter(p => tab.id === 'ALL' || p.cohort === tab.id).length}</span></button>)}
+      {[{ id: 'ALL', label: 'Barchasi', icon: UsersRound }, { id: 'MATERNAL', label: 'Homilador ayollar', icon: UsersRound }, { id: 'POSTPARTUM', label: 'Tug‘ruqdan keyingi onalar', icon: HeartPulse }, { id: 'NEONATAL', label: 'Chaqaloqlar', icon: Baby }].map(tab => <button key={tab.id} role="tab" aria-selected={cohort === tab.id} className={`registry-tab ${cohort === tab.id ? 'active' : ''}`} onClick={() => setCohort(tab.id)}><tab.icon size={16} />{tab.label}<span>{scope.filter(p => tab.id === 'ALL' || p.cohort === tab.id).length}</span></button>)}
     </div>
     <div className="registry-filters">
       <label className="registry-search"><Search size={17} /><input aria-label="Bemor ismi yoki ID bo‘yicha qidirish" placeholder="Ism yoki ID bo‘yicha qidirish..." value={query} onChange={e => setQuery(e.target.value)} /></label>
@@ -46,7 +46,7 @@ export default function Registry({ patients, onSelect, persona, riskFilter, onRi
     </div>
     <div className="registry-table-scroll"><table className="registry-table"><thead><tr><th><button className="table-sort" onClick={() => setSortByName(!sortByName)}>BEMOR <ArrowUpDown size={12} /></button></th><th>XAVF DARAJASI</th><th>KLINIK KO‘RSATKICHLAR</th><th>MAS’UL SHIFOKOR</th><th>JARAYON HOLATI</th><th><span className="sr-only">Batafsil</span></th></tr></thead><tbody>
       {filtered.map(p => { const doctor = doctors.find(d => d.id === p.doctor); return <tr key={p.id} className={`patient-row ${p.zone === 'RED' ? 'priority-row' : ''}`} onClick={() => onSelect(p)}>
-        <td><div className="patient-identity"><span className={`patient-avatar ${p.cohort === 'NEONATAL' ? 'baby-avatar' : ''}`}>{p.cohort === 'NEONATAL' ? <Baby size={21} /> : p.name.split(' ').map(n => n[0]).slice(0, 2).join('')}</span><div><button className="patient-name" onClick={e => { e.stopPropagation(); onSelect(p); }}>{p.name}</button><span className="patient-meta">{p.cohort === 'MATERNAL' ? `${p.age} yosh · ` : ''}{p.stage} <span className="meta-dot">·</span> {p.clinic}</span></div></div></td>
+        <td><div className="patient-identity"><span className={`patient-avatar ${p.cohort === 'NEONATAL' ? 'baby-avatar' : ''}`}>{p.cohort === 'NEONATAL' ? <Baby size={21} /> : p.name.split(' ').map(n => n[0]).slice(0, 2).join('')}</span><div><button className="patient-name" onClick={e => { e.stopPropagation(); onSelect(p); }}>{p.name}</button><span className="patient-meta">{p.cohort !== 'NEONATAL' ? `${p.age} yosh · ` : ''}{p.stage} <span className="meta-dot">·</span> {p.clinic}</span></div></div></td>
         <td><span className={`zone-badge zone-${p.zone.toLowerCase()}`}><i />{zoneLabels[p.zone]}</span><span className="patient-reason">{p.reason}</span></td>
         <td><div className="clinical-values">{p.vitals.map((v, i) => <span key={v} className={i === 0 && p.zone !== 'GREEN' ? `vital-${p.zone.toLowerCase()}` : ''}>{v}</span>)}</div></td>
         <td><span className="doctor-name">{doctor ? `Dr. ${doctor.name.split(' ').at(-1)}` : 'Biriktirilmagan'}</span><span className="doctor-specialty">{doctor?.specialty}</span></td>

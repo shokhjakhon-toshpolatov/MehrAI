@@ -149,6 +149,12 @@ export default function Dashboard() {
       visit.patient === selected?.id &&
       ["proposed", "booked", "untimed"].includes(visit.status),
   );
+  const relatedPatients =
+    selected?.cohort === "POSTPARTUM"
+      ? patients.filter((p) => p.motherId === selected.id)
+      : selected?.motherId
+        ? patients.filter((p) => p.id === selected.motherId)
+        : [];
   const selectedTasks = (data?.calls ?? []).filter(
     (call) => call.patientId === selected?.id,
   );
@@ -176,6 +182,7 @@ export default function Dashboard() {
           outreach: "Aloqa natijasi qayd etildi",
           call: "Aloqa vazifasi yaratildi",
           facility_response: "Muassasa javobi qayd etildi",
+          postpartum_follow_up: "Tug‘ruqdan keyingi kuzatuv qayd etildi",
           attendance: "Tashrif holati qayd etildi",
         }[e.action] ?? "Holat yangilandi"),
       detail: "",
@@ -401,6 +408,11 @@ export default function Dashboard() {
                   <span>
                     {scoped.filter((p) => p.cohort === "NEONATAL").length}{" "}
                     chaqaloq
+                  </span>
+                  <i aria-hidden="true" />
+                  <span>
+                    {scoped.filter((p) => p.cohort === "POSTPARTUM").length}{" "}
+                    tug‘ruqdan keyin
                   </span>
                 </div>
               </button>
@@ -939,6 +951,9 @@ export default function Dashboard() {
                     <h3>Klinik ko‘rsatkichlar</h3>
                     <strong>{selected.reason}</strong>
                     <div className="vital-cards">
+                      {selected.vitals.length === 0 && (
+                        <p>Ko‘rsatkichlar kiritilmagan.</p>
+                      )}
                       {selected.vitals.map((v) => (
                         <div key={v}>
                           <Activity size={17} />
@@ -989,6 +1004,58 @@ export default function Dashboard() {
                           }
                         >
                           Bandman — o‘tkazish
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {relatedPatients.length > 0 && (
+                    <div className="detail-block">
+                      <h3>
+                        {selected.cohort === "POSTPARTUM"
+                          ? "Bog‘langan chaqaloq"
+                          : "Onasi"}
+                      </h3>
+                      <div className="button-row">
+                        {relatedPatients.map((patient) => (
+                          <button
+                            key={patient.id}
+                            type="button"
+                            className="button"
+                            onClick={() => setSelected(patient)}
+                          >
+                            {patient.name}
+                            <ChevronRight size={15} />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {selected.cohort === "POSTPARTUM" && (
+                    <div className="detail-block">
+                      <h3>Tug‘ruqdan keyingi kuzatuv</h3>
+                      <p>{selected.status}</p>
+                      <p>
+                        {selected.followUpCompletedAt
+                          ? `Qayd etilgan: ${formatDate(selected.followUpCompletedAt)}`
+                          : selected.followUpAt
+                            ? `Rejalashtirilgan: ${formatDate(selected.followUpAt)}`
+                            : selected.time}
+                      </p>
+                      {selected.statusCode === "POSTPARTUM_FOLLOW_UP" && (
+                        <button
+                          type="button"
+                          className="button primary"
+                          disabled={offline || working}
+                          onClick={() =>
+                            save(() =>
+                              performCaseAction(
+                                selected.id,
+                                "postpartum-follow-up",
+                              ),
+                            )
+                          }
+                        >
+                          <Check size={15} /> Kuzatuv o‘tkazilganini qayd etish
                         </button>
                       )}
                     </div>

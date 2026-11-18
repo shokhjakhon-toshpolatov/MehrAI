@@ -65,6 +65,21 @@ class BackendTests(unittest.TestCase):
         self.assertTrue(all('telecom' not in p for p in self.client.get('/api/registry').json()['patients']))
         self.assertNotEqual(first['id'], self.client.post('/api/cases/p1/call').json()['id'])
 
+    def test_postpartum_follow_up_is_linked_and_independent(self):
+        data = self.client.get('/api/registry').json()
+        patients = {p['id']: p for p in data['patients']}
+        self.assertEqual(patients['p4']['mother_id'], 'p5')
+        self.assertEqual(patients['p5']['cohort_type'], 'POSTPARTUM')
+        self.assertEqual(evaluate('POSTPARTUM', {'systolic': 180, 'reduced_fetal_movement': True})['risk_zone'], 'REVIEW')
+        self.assertEqual(self.client.post('/api/cases/p4/postpartum-follow-up').status_code, 409)
+        complete = self.client.post('/api/cases/p5/postpartum-follow-up').json()
+        self.assertEqual(complete['status'], 'POSTPARTUM_FOLLOWED_UP')
+        self.assertEqual(self.client.post('/api/cases/p5/postpartum-follow-up').json(), complete)
+        main.init()
+        refreshed = {c['id']: c for c in self.client.get('/api/registry').json()['cases']}
+        self.assertEqual(refreshed['p5']['follow_up_completed_at'], complete['follow_up_completed_at'])
+        self.assertEqual(refreshed['p4']['referral_status'], 'AWAITING_FACILITY')
+
     def test_seed_and_routing(self):
         data=self.client.get('/api/registry').json()
         cases={c['id']:c for c in data['cases']}

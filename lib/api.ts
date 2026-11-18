@@ -43,7 +43,9 @@ type Observation = Record<string, string | number | boolean | null | undefined>;
 type ApiPatient = {
   id: string;
   name: string;
-  cohort_type: "MATERNAL" | "NEONATAL";
+  cohort_type: Patient["cohort"];
+  mother_id?: string;
+  postpartum_days?: number;
   age?: number;
   age_days?: number;
   gestational_weeks?: number;
@@ -62,6 +64,8 @@ type ApiCase = {
   created_at?: string;
   appointment_time?: string | null;
   referral_status?: string;
+  follow_up_at?: string;
+  follow_up_completed_at?: string;
 };
 type ApiCall = {
   id: string;
@@ -90,6 +94,8 @@ const doctorIds: Record<string, string> = {
 };
 const statuses: Record<string, string> = {
   ROUTINE: "Rejali kuzatuv",
+  POSTPARTUM_FOLLOW_UP: "Kuzatuv kutilmoqda",
+  POSTPARTUM_FOLLOWED_UP: "Kuzatuv qayd etildi",
   PENDING_DOCTOR_ACK: "Shifokor tasdig‘i kutilmoqda",
   ESCALATED: "Eskalatsiya qilindi",
   DOCTOR_ACCEPTED: "Shifokor qabul qildi",
@@ -232,7 +238,12 @@ export async function loadRegistry(): Promise<RegistryResult> {
       stage:
         p.cohort_type === "NEONATAL"
           ? `${p.age_days ?? "—"} kunlik`
-          : `${p.gestational_weeks ?? "—"}-hafta`,
+          : p.cohort_type === "POSTPARTUM"
+            ? `Tug‘ruqdan keyin ${p.postpartum_days ?? "—"} kun`
+            : `${p.gestational_weeks ?? "—"}-hafta`,
+      motherId: p.mother_id,
+      followUpAt: c.follow_up_at,
+      followUpCompletedAt: c.follow_up_completed_at,
       clinic: p.clinic,
       zone: c.risk_zone as Patient["zone"],
       reason: c.risk_reasons.length
@@ -248,7 +259,12 @@ export async function loadRegistry(): Promise<RegistryResult> {
       updatedAt: c.updated_at ?? c.created_at,
       appointmentAt: c.appointment_time ?? undefined,
       referralStatus: c.referral_status,
-      time: displayDate(c.appointment_time ?? undefined),
+      time: displayDate(
+        c.follow_up_completed_at ??
+          c.follow_up_at ??
+          c.appointment_time ??
+          undefined,
+      ),
     };
   });
   const names = new Map(
@@ -285,7 +301,7 @@ export async function loadRegistry(): Promise<RegistryResult> {
 
 export async function performCaseAction(
   id: string,
-  action: "accept" | "busy" | "call",
+  action: "accept" | "busy" | "call" | "postpartum-follow-up",
 ): Promise<void> {
   await request(`/api/cases/${encodeURIComponent(id)}/${action}`, "POST");
 }
