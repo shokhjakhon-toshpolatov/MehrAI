@@ -92,23 +92,51 @@ class BackendTests(unittest.TestCase):
     def tearDown(self):
         self.client.__exit__(None,None,None)
         self.tmp.cleanup()
-    def facility_visit(self, case_id='p2', *, confirmed=False, mode='timed'):
+    def facility_visit(self, case_id='p2', *, confirmed=False, mode='timed', practitioner_id='d1'):
         from datetime import timedelta
-        payload = {'mode': mode, 'facility': 'Namuna poliklinikasi', 'practitioner_id': 'd1', 'confirmed': confirmed}
+        case = next(c for c in self.client.get('/api/registry').json()['cases'] if c['id'] == case_id)
+        approval = self.client.post(f'/api/referrals/{case_id}/approve', json={'practitioner_id': case['assigned_practitioner_id']})
+        self.assertEqual(approval.status_code, 200, approval.text)
+        payload = {'mode': mode, 'facility': 'Namuna poliklinikasi',
+                   'practitioner_id': practitioner_id, 'confirmed': confirmed}
         if mode == 'timed':
             payload['start'] = main.stamp(main.now() + timedelta(days=1))
         response = self.client.post(f'/api/referrals/{case_id}/response', json=payload)
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
-    def test_manual_outreach_keeps_rescheduling_in_the_referral_queue(self):
+    def test_sample_slot_booking_persists_and_cannot_be_double_booked(self):
+        data = self.client.get('/api/registry').json()
+        slot = next(slot for slot in data['availability'] if slot['available'])
+        payload = {'mode': 'timed', 'slot_id': slot['id']}
+        case_path = '/api/referrals/p2'
+        self.assertEqual(self.client.post(f'{case_path}/response', json=payload).status_code, 409)
+        for case_id in ('p2', 'p4'):
+            case = next(case for case in data['cases'] if case['id'] == case_id)
+            response = self.client.post(f'/api/referrals/{case_id}/approve',
+                                        json={'practitioner_id': case['assigned_practitioner_id']})
+            self.assertEqual(response.status_code, 200, response.text)
+        response = self.client.post(f'{case_path}/response', json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        visit = response.json()
+        self.assertEqual((visit['start'], visit['practitioner'], visit['facility']),
+                         (slot['start'], slot['practitioner_id'], slot['facility']))
+        registry = self.client.get('/api/registry').json()
+        self.assertIn(visit, registry['appointments'])
+        self.assertFalse(next(item for item in registry['availability'] if item['id'] == slot['id'])['available'])
+        self.assertEqual(self.client.post('/api/referrals/p4/response', json=payload).status_code, 409)
+
+    def test_call_result_keeps_rescheduling_in_the_referral_queue(self):
         original = self.facility_visit()
         data = self.client.get('/api/registry').json()
         call = next(c for c in data['calls'] if c['case_id'] == 'p2')
-        path = f"/api/outreach/{call['id']}/outcome"
-        request = {'outcome': 'RESCHEDULE_REQUESTED', 'attempt_id': 'a1'}
-        self.assertEqual(self.client.post(path, json=request).json()['attempts'], 1)
-        self.assertEqual(self.client.post(path, json=request).json()['attempts'], 1)
+        self.assertEqual(self.client.post(f"/api/outreach/{call['id']}/outcome",
+                                         json={'outcome': 'RESCHEDULE_REQUESTED', 'attempt_id': 'a1'}).status_code, 409)
+        callback = {'case_id': 'p2', 'intent': 'RESCHEDULE_REQUESTED', 'event_id': 'a1'}
+        for _ in range(2):
+            self.assertEqual(self.client.post('/webhooks/voicelab/status', json=callback).status_code, 200)
+        logged = next(row for row in self.client.get('/api/registry').json()['calls'] if row['id'] == call['id'])
+        self.assertEqual((logged['status'], logged['attempts']), ('RESCHEDULE_REQUESTED', 1))
         updated = self.client.get(f"/dmed/v2/Appointment/{original['id']}").json()
         self.assertEqual(updated['status'], 'reschedule_requested')
         self.assertEqual(updated['start'], original['start'])
@@ -156,7 +184,7 @@ class BackendTests(unittest.TestCase):
         main.init()
         refreshed = {c['id']: c for c in self.client.get('/api/registry').json()['cases']}
         self.assertEqual(refreshed['p5']['follow_up_completed_at'], complete['follow_up_completed_at'])
-        self.assertEqual(refreshed['p4']['referral_status'], 'AWAITING_FACILITY')
+        self.assertEqual(refreshed['p4']['referral_status'], 'AWAITING_CLINICIAN')
 
     def test_postpartum_sample_assessment_does_not_complete_follow_up(self):
         data = self.client.get('/api/registry').json()
@@ -170,12 +198,202 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(patients['p7']['mother_id'], 'p6')
         self.assertEqual(cases['p7']['status'], 'ROUTINE')
 
+    def test_referral_requires_assigned_clinician_and_facility_before_contact(self):
+        from datetime import timedelta
+        path = '/api/referrals/p2'
+        visit = {'mode':'timed', 'facility':'Namuna', 'practitioner_id':'d1',
+                 'start':main.stamp(main.now()+timedelta(days=1))}
+        self.assertEqual(self.client.post(path+'/response', json=visit).status_code, 409)
+        self.assertEqual(self.client.post('/api/cases/p2/call').status_code, 409)
+        self.assertEqual(self.client.post(path+'/approve', json={'practitioner_id':'d1'}).status_code, 409)
+        approved = self.client.post(path+'/approve', json={'practitioner_id':'d3'}).json()
+        self.assertEqual(approved['referral_status'], 'AWAITING_FACILITY')
+        self.assertEqual(self.client.post('/api/cases/p2/call').status_code, 409)
+        result = self.client.post(path+'/response', json=visit).json()
+        state = self.client.get('/api/registry').json()
+        self.assertEqual(result['practitioner'], 'd1')
+        self.assertEqual(next(c for c in state['cases'] if c['id']=='p2')['assigned_practitioner_id'], 'd3')
+        self.assertTrue(any(c.get('appointment_id') == result['id'] for c in state['calls']))
+        self.assertEqual(self.client.post('/api/referrals/p3/response', json=visit).status_code, 409)
+
+    def test_planned_call_runs_after_booking_without_confirming_attendance_or_acceptance(self):
+        from datetime import datetime, timedelta
+        from unittest.mock import patch
+        visit = self.facility_visit()
+        self.assertEqual(self.client.post('/api/cases/p2/call').status_code, 409)
+        with main.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            call = next(task for task in main.all_of(db, 'Call') if task['appointment_id'] == visit['id'])
+            self.assertEqual(call['status'], 'DEMO_CALL_QUEUED')
+            queued_until = datetime.fromisoformat(call['next_transition_at'])
+            with patch.object(main, 'now', return_value=queued_until):
+                main.process_due(db)
+                self.assertEqual(main.get(db, 'Call', call['id'])[0]['status'], 'DEMO_CALL_RUNNING')
+            with patch.object(main, 'now', return_value=queued_until + timedelta(seconds=4)):
+                main.process_due(db)
+                result, _ = main.get(db, 'Call', call['id'])
+                self.assertEqual((result['status'], result['attempts']), ('DEMO_CALL_COMPLETE', 1))
+                self.assertEqual(main.get(db, 'Appointment', visit['id'])[0]['status'], 'proposed')
+
+    def test_openrouter_can_only_reorder_existing_evidence(self):
+        from unittest.mock import patch
+        from backend.explanations import explain_case
+        evidence = ['First', 'Second', 'Third', 'Fourth']
+        case = {'cohort_type': 'MATERNAL', 'risk_zone': 'YELLOW', 'risk_reasons': evidence}
+        with patch.dict('os.environ', {'OPENROUTER_API_KEY':'test-key', 'MEHRAI_OPENROUTER_MODEL':''}), patch('backend.explanations.httpx.Client') as client:
+            post = client.return_value.__enter__.return_value.post
+            provider = post.return_value
+            provider.json.return_value = {'choices': [{'finish_reason':'stop', 'message': {'content':'{"indices":[1,0],"review_focus":"SCREENING_FINDINGS"}'}}]}
+            result = explain_case({**case, 'name':'Private name', 'patient_id':'private-id'})
+            self.assertEqual(result['source'], 'openrouter')
+            self.assertEqual(result['reasons'], ['Second', 'First', 'Third', 'Fourth'])
+            args, kwargs = post.call_args
+            self.assertEqual(args, ('https://openrouter.ai/api/v1/chat/completions',))
+            self.assertEqual(kwargs['headers']['Authorization'], 'Bearer test-key')
+            self.assertEqual(kwargs['json']['model'], 'qwen/qwen3.6-27b')
+            self.assertEqual(kwargs['json']['provider'], {'data_collection':'deny','zdr':True,'require_parameters':True})
+            self.assertNotIn('Private name', str(kwargs['json']))
+            self.assertNotIn('private-id', str(kwargs['json']))
+            provider.json.return_value = {'choices': [{'finish_reason':'stop', 'message': {'content':'{"indices":[1,9],"review_focus":"SCREENING_FINDINGS"}'}}]}
+            self.assertEqual(explain_case(case), {'source':'rules','zone':'YELLOW','reasons':evidence,'analyzer_status':'unavailable'})
+            client.reset_mock()
+            self.assertEqual(explain_case({**case, 'risk_zone':'RED'}),
+                             {'source':'rules','zone':'RED','reasons':evidence})
+            client.assert_not_called()
+        with patch.dict('os.environ', {'OPENROUTER_API_KEY':''}), patch('backend.explanations.httpx.Client') as client:
+            self.assertEqual(explain_case(case)['analyzer_status'], 'not_configured')
+            client.assert_not_called()
+
+    def test_registry_only_offers_model_review_when_there_is_reviewable_evidence(self):
+        from unittest.mock import patch
+        cases = {case['id']: case for case in self.client.get('/api/registry').json()['cases']}
+        self.assertFalse(cases['p1']['analysis_eligible'])
+        self.assertTrue(cases['p2']['analysis_eligible'])
+        self.assertFalse(cases['p3']['analysis_eligible'])
+        with patch('backend.explanations.httpx.Client') as client:
+            self.assertEqual(self.client.post('/api/cases/p1/explanation').json()['source'], 'rules')
+            client.assert_not_called()
+
+    def test_red_change_requires_review_then_runs_one_simulated_call(self):
+        from datetime import timedelta
+        from unittest.mock import patch
+        change = self.client.post('/api/simulate/neonatal-red').json()
+        self.assertEqual(change['previous_risk_zone'], 'YELLOW')
+        self.assertEqual(change['previous_observation']['bilirubin'], 238)
+        self.assertEqual(change['risk_zone'], 'RED')
+        path = '/api/cases/p4/approve-urgent-outreach'
+        clinician = {'practitioner_id':'d4'}
+        self.assertEqual(self.client.post(path, json=clinician).status_code, 409)
+        self.assertEqual(self.client.post('/api/cases/p4/call').status_code, 409)
+        self.assertEqual(self.client.post('/api/cases/p4/accept').status_code, 200)
+        self.assertEqual(self.client.post(path, json={'practitioner_id':'d1'}).status_code, 409)
+        self.assertEqual(self.client.post(path, json=clinician).status_code, 200)
+        self.assertEqual(self.client.post(path, json=clinician).status_code, 200)
+        initial = main.now()
+        with main.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            tasks = [c for c in main.all_of(db, 'Call') if c['case_id'] == 'p4']
+            self.assertEqual(len(tasks), 1)
+            call_id = tasks[0]['id']
+            self.assertEqual(tasks[0]['target_role'], 'MOTHER_OF_NEWBORN')
+            with patch('backend.main.now', return_value=initial+timedelta(seconds=2)):
+                main.process_due(db)
+                self.assertEqual(main.get(db, 'Call', call_id)[0]['status'], 'DEMO_CALL_RUNNING')
+            with patch('backend.main.now', return_value=initial+timedelta(seconds=7)):
+                main.process_due(db)
+                self.assertEqual(main.get(db, 'Call', call_id)[0]['status'], 'DEMO_CALL_COMPLETE')
+        self.assertFalse(self.client.get('/api/registry').json()['appointments'])
+
+    def test_urgent_visit_saves_clinician_time_and_queues_one_patient_reminder(self):
+        from datetime import datetime, timedelta
+        from unittest.mock import patch
+        case_id = 'p3'
+        start = main.stamp(main.now() + timedelta(hours=2))
+        path = f'/api/cases/{case_id}/urgent-visit'
+        self.assertEqual(self.client.post(path, json={'practitioner_id': 'd2', 'start': start}).status_code, 409)
+        request = {'practitioner_id': 'd1', 'start': start}
+        response = self.client.post(path, json=request)
+        self.assertEqual(response.status_code, 200, response.text)
+        visit = response.json()
+        self.assertEqual(self.client.post(path, json=request).json()['id'], visit['id'])
+        with main.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            call, = [task for task in main.all_of(db, 'Call') if task.get('appointment_id') == visit['id']]
+            self.assertEqual((call['target_role'], call['appointment_start']), ('PATIENT', start))
+            due = datetime.fromisoformat(call['next_transition_at'])
+            prior, _ = main.get(db, 'Case', case_id)
+            main.ingest(db, case_id, {**prior['observation'], 'id': 'urgent-repeat-observation'})
+            with patch.object(main, 'now', return_value=due):
+                main.process_due(db)
+                self.assertEqual(main.get(db, 'Call', call['id'])[0]['status'], 'DEMO_CALL_RUNNING')
+            with patch.object(main, 'now', return_value=due + timedelta(seconds=4)):
+                main.process_due(db)
+                self.assertEqual(main.get(db, 'Call', call['id'])[0]['status'], 'DEMO_CALL_COMPLETE')
+                self.assertEqual(main.get(db, 'Appointment', visit['id'])[0]['status'], 'proposed')
+
+    def test_agent_reviews_measured_change_without_reclassifying_red(self):
+        import json
+        from unittest.mock import patch
+        from backend.explanations import explain_case
+        case = self.client.post('/api/simulate/neonatal-red').json()
+        with patch.dict('os.environ', {'OPENROUTER_API_KEY':'test-key'}), patch('backend.explanations.httpx.Client') as client:
+            post = client.return_value.__enter__.return_value.post
+            post.return_value.json.return_value = {'choices': [{
+                'finish_reason':'stop', 'message': {'content':'{"indices":[1],"review_focus":"VERIFY_CHANGE"}'},
+            }]}
+            result = explain_case(case)
+            self.assertEqual(result['zone'], 'RED')
+            self.assertEqual(result['reasons'], case['risk_reasons'])
+            self.assertEqual(result['review_focus'], 'VERIFY_CHANGE')
+            messages = post.call_args.kwargs['json']['messages']
+            self.assertEqual(json.loads(messages[1]['content'])['changes']['bilirubin'], {'before':238,'after':295})
+
+    def test_stream_delivers_mock_observations_and_queues_analysis(self):
+        from datetime import timedelta
+        from unittest.mock import patch
+        start = self.client.post('/api/simulation/start').json()
+        self.assertEqual(start['events'], [])
+        self.assertEqual(self.client.post('/api/simulation/start').json()['id'], start['id'])
+        tick = main.now() + timedelta(seconds=2)
+        with main.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            for index in range(start['total']):
+                with patch('backend.main.now', return_value=tick):
+                    main.advance_demo_feed(db)
+                    main.advance_demo_feed(db)
+                run, _ = main.get(db, 'DemoRun', start['id'])
+                self.assertEqual(len(run['events']), index + 1)
+                event = run['events'][-1]
+                observation, _ = main.get(db, 'Observation', event['id'])
+                self.assertEqual(observation['patient'], event['patient_id'])
+                job, _ = main.get(db, 'DemoAnalysis', event['id'])
+                self.assertEqual(job['status'], 'PENDING')
+                tick += timedelta(seconds=4)
+            self.assertEqual(run['status'], 'COMPLETE')
+            self.assertEqual((run['events'][-1]['previous_zone'], run['events'][-1]['zone']), ('YELLOW', 'RED'))
+        data = self.client.get('/api/registry').json()
+        newborn = next(p for p in data['patients'] if p['id'] == 'p4')
+        self.assertEqual(newborn['contact']['mother_name'], 'Nigora Nazarova')
+        self.assertEqual(newborn['contact']['phone_display'], '+998 •• ••• •• ••')
+        self.assertEqual(data['demo_stream']['events'][-1]['zone'], 'RED')
+        last = data['demo_stream']['events'][-1]
+        self.assertEqual(last['previous_observation']['bilirubin'], 238)
+        self.assertEqual(last['observation']['bilirubin'], 295)
+
+    def test_registry_display_explains_findings_in_uzbek_using_recorded_values(self):
+        cases = {case['id']: case for case in self.client.get('/api/registry').json()['cases']}
+        self.assertEqual(cases['p2']['risk_reasons'], ['Kamqonlik belgisi', 'Endokrinolog ko‘rigi kerak'])
+        self.assertEqual(cases['p2']['risk_evidence'], [
+            'Gemoglobin 94 g/L. Kamqonlik belgisi.',
+            'Glyukoza 5.8 mmol/L. Endokrinolog ko‘rigi kerak.',
+        ])
+
     def test_seed_and_routing(self):
         data=self.client.get('/api/registry').json()
         cases={c['id']:c for c in data['cases']}
         self.assertEqual([cases[f'p{i}']['risk_zone'] for i in range(1,5)],['GREEN','YELLOW','RED','YELLOW'])
         self.assertEqual(cases['p2']['assigned_practitioner_id'],'d3')
-        self.assertEqual(cases['p2']['referral_status'],'AWAITING_FACILITY')
+        self.assertEqual(cases['p2']['referral_status'],'AWAITING_CLINICIAN')
         self.assertEqual(data['appointments'],[])
         self.assertEqual(cases['p4']['assigned_practitioner_id'],'d4')
     def test_red_escalates_but_accepted_does_not(self):
@@ -204,6 +422,7 @@ class BackendTests(unittest.TestCase):
         after=self.client.get('/api/registry').json()
         self.assertEqual(len(before['calls']),len(after['calls']))
     def test_voice_idempotency_and_fallback(self):
+        self.facility_visit()
         event={'case_id':'p2','intent':'NO_ANSWER','event_id':'first'}
         self.client.post('/webhooks/voicelab/status',json=event)
         r=self.client.post('/webhooks/voicelab/status',json=event).json()
@@ -265,7 +484,7 @@ class BackendTests(unittest.TestCase):
     def test_worker_counts_only_confirmed_timed_visits_as_no_show(self):
         from datetime import timedelta
         confirmed = self.facility_visit('p2', confirmed=True)
-        proposed = self.facility_visit('p4')
+        proposed = self.facility_visit('p4', practitioner_id='d4')
         with main.connect() as db:
             for visit in (confirmed, proposed):
                 visit['start'] = main.stamp(main.now() - timedelta(hours=3))
@@ -290,7 +509,7 @@ class BackendTests(unittest.TestCase):
     def test_case_mutations_persist_and_audit(self):
         self.assertEqual(self.client.post('/api/cases/p3/busy').status_code,200)
         self.assertEqual(self.client.post('/api/cases/p3/accept').status_code,200)
-        self.assertEqual(self.client.post('/api/cases/p2/call').status_code,200)
+        self.assertEqual(self.client.post('/api/cases/p1/call').status_code,200)
         registry=self.client.get('/api/registry').json()
         case=next(c for c in registry['cases'] if c['id']=='p3')
         self.assertEqual(case['status'],'DOCTOR_ACCEPTED')
@@ -300,7 +519,7 @@ class BackendTests(unittest.TestCase):
         with main.connect() as db:
             self.assertEqual(main.get(db,'Case','p3')[0]['status'],'DOCTOR_ACCEPTED')
             self.assertEqual(len(main.all_of(db,'AuditEvent')),3)
-        call=next(c for c in registry['calls'] if c['case_id']=='p2')
+        call=next(c for c in registry['calls'] if c['case_id']=='p1')
         self.assertIn(call['status'],('QUEUED','READY'))
         self.assertEqual(call['attempts'],0)
         self.assertEqual(call['mode'],'simulation')

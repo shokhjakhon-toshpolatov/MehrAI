@@ -61,3 +61,24 @@ test('local hostname defaults to the persistent API', async () => {
 test('remote hostname without configuration stays disconnected', async () => {
   await assert.rejects(client('', () => { throw new Error('must not fetch'); }, 'example.com').loadRegistry(), /NEXT_PUBLIC_API_URL/);
 });
+
+test('merged registry keeps booking and analysis alongside contact history', async () => {
+  const at = '2026-11-18T08:30:00+05:00';
+  const combined = {
+    ...payload,
+    patients: [{ ...payload.patients[0], contact_phone: '+12025550100' }],
+    cases: [{ ...payload.cases[0], referral_approved_at: at, appointment_time: at,
+      analysis_eligible: true, demo_analysis: { status: 'PENDING' } }],
+    availability: [{ id: 'slot-1', practitioner_id: 'd1', start: at, available: true }],
+    demo_stream: { id: 'run-1', status: 'STREAMING', total: 4, events: [] },
+    attempt_history: [{ id: 'attempt-1', case_id: 'p1', channel: 'doctor', started_at: at, outcome: 'REACHED' }],
+  };
+  const result = await client('http://localhost:8000', async () => ({ ok: true, json: async () => combined })).loadRegistry();
+  assert.equal(result.patients[0].contactPhone, '+12025550100');
+  assert.equal(result.patients[0].timeAt, at);
+  assert.equal(result.patients[0].referralApprovedAt, at);
+  assert.equal(result.demoAnalyses.p1.status, 'PENDING');
+  assert.equal(result.demoStream.id, 'run-1');
+  assert.equal(result.availability[0].id, 'slot-1');
+  assert.equal(result.history[0].id, 'attempt-1');
+});

@@ -11,6 +11,7 @@ export type Outreach = {
   simulated?: boolean;
   scheduledAt: string;
   appointmentId?: string;
+  appointmentStart?: string;
   attempts: number;
 };
 export type AuditEvent = {
@@ -37,9 +38,44 @@ export type ContactAttempt = {
   outcome: OutreachOutcome | "SUBMITTING" | "QUEUED" | "RINGING" | "IN_PROGRESS" | "COMPLETED" | "BUSY" | "FAILED" | "CANCELLED" | "CONFIG_ERROR" | "REJECTED" | "UNKNOWN";
   started_at: string; duration_seconds: number | null;
 };
+export type AvailabilitySlot = {
+  id: string;
+  practitioner_id: string;
+  facility: string;
+  start: string;
+  end: string;
+  available: boolean;
+};
+export type DemoAnalysis = {
+  status: "PENDING" | "RUNNING" | "COMPLETE" | "SUPERSEDED";
+  result?: RiskExplanation | null;
+};
+export type DemoEvent = {
+  id: string;
+  patient_id: string;
+  patient_name: string;
+  received_at: string;
+  previous_zone?: Patient["zone"];
+  zone: Patient["zone"];
+  analysis_status?: DemoAnalysis["status"];
+  analysis_source?: RiskExplanation["source"];
+  analysis_unavailable?: boolean;
+  analysis_reason?: string;
+  previous_observation?: Observation;
+  observation?: Observation;
+};
+export type DemoStream = {
+  id: string;
+  status: "STREAMING" | "COMPLETE";
+  total: number;
+  events: DemoEvent[];
+};
 export type RegistryResult = {
   history: ContactAttempt[];
+  demoStream: DemoStream | null;
+  demoAnalyses: Record<string, DemoAnalysis>;
   appointments: Appointment[];
+  availability: AvailabilitySlot[];
   patients: Patient[];
   calls: Outreach[];
   source: "mock" | "live";
@@ -52,6 +88,7 @@ type ApiPatient = {
   name: string;
   cohort_type: Patient["cohort"];
   mother_id?: string;
+  contact?: { mother_name?: string };
   postpartum_days?: number;
   age?: number;
   contact_phone?: string;
@@ -60,10 +97,13 @@ type ApiPatient = {
   clinic: string;
 };
 type ApiCase = {
+  analysis_eligible?: boolean;
+  demo_analysis?: DemoAnalysis;
   id: string;
   patient_id: string;
   risk_zone: string;
   risk_reasons: string[];
+  risk_evidence?: string[];
   status: string;
   observation: Observation;
   assigned_practitioner_id: string | null;
@@ -72,6 +112,10 @@ type ApiCase = {
   created_at?: string;
   appointment_time?: string | null;
   referral_status?: string;
+  referral_approved_at?: string;
+  urgent_outreach_approved_at?: string;
+  previous_risk_zone?: Patient["zone"];
+  previous_observation?: Observation;
   follow_up_at?: string;
   follow_up_completed_at?: string;
   assessment_at?: string;
@@ -86,11 +130,14 @@ type ApiCall = {
   status: string;
   scheduled_at: string;
   appointment_id?: string;
+  appointment_start?: string;
   attempts: number;
 };
 type ApiRegistry = {
   attempt_history?: ContactAttempt[];
+  demo_stream?: DemoStream | null;
   appointments?: Appointment[];
+  availability?: AvailabilitySlot[];
   mode: "mock" | "live";
   patients: ApiPatient[];
   cases: ApiCase[];
@@ -111,7 +158,8 @@ const statuses: Record<string, string> = {
   PENDING_DOCTOR_ACK: "Shifokor tasdig‘i kutilmoqda",
   ESCALATED: "Eskalatsiya qilindi",
   DOCTOR_ACCEPTED: "Shifokor qabul qildi",
-  REFERRED: "Yo‘llanma berildi",
+  REFERRED: "Yo‘llanma tasdiqlandi",
+  REFERRAL_REVIEW: "Shifokor ko‘rigi kutilmoqda",
   VISIT_PROPOSED: "Qabul vaqti taklif qilindi",
   VISIT_UNTIMED: "Vaqtsiz tashrif kelishildi",
   PATIENT_CONFIRMED: "Bemor qabulni tasdiqladi",
@@ -127,6 +175,9 @@ const targets: Record<string, string> = {
 };
 const callStatuses: Record<string, string> = {
   QUEUED: "Navbatda",
+  DEMO_CALL_QUEUED: "AI sinov qo‘ng‘irog‘i navbatda",
+  DEMO_CALL_RUNNING: "AI sinov qo‘ng‘irog‘i davom etmoqda",
+  DEMO_CALL_COMPLETE: "AI sinov qo‘ng‘irog‘i yakunlandi",
   READY: "Qo‘ng‘iroqqa tayyor",
   CONFIRMED: "Tasdiqlangan",
   RESCHEDULE_REQUESTED: "Boshqa vaqt so‘ralgan",
@@ -162,10 +213,11 @@ async function request<T>(
   path: string,
   method = "GET",
   payload?: object,
+  timeoutMs = 12_000,
 ): Promise<T> {
   const base = apiBase();
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 12_000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(`${base}${path}`, {
       method,
@@ -213,7 +265,7 @@ function displayDate(value?: string): string {
     minute: "2-digit",
   }).format(date);
 }
-function observationVitals(o: Observation): string[] {
+export function observationVitals(o: Observation): string[] {
   const list: string[] = [];
   if (o.systolic != null && o.diastolic != null)
     list.push(`AQB ${o.systolic}/${o.diastolic} mmHg`);
@@ -256,6 +308,7 @@ export async function loadRegistry(): Promise<RegistryResult> {
             ? `Tug‘ruqdan keyin ${p.postpartum_days ?? "—"} kun`
             : `${p.gestational_weeks ?? "—"}-hafta`,
       motherId: p.mother_id,
+      motherName: p.contact?.mother_name,
       assessedAt: c.assessment_at,
       assessedBy: c.assessed_by
         ? (doctorIds[c.assessed_by] ?? c.assessed_by)
@@ -279,6 +332,15 @@ export async function loadRegistry(): Promise<RegistryResult> {
       appointmentAt: c.appointment_time ?? undefined,
       referralStatus: c.referral_status,
       timeAt: c.follow_up_completed_at ?? c.follow_up_at ?? c.appointment_time ?? undefined,
+      referralApprovedAt: c.referral_approved_at,
+      urgentOutreachApprovedAt: c.urgent_outreach_approved_at,
+      analysisEligible: c.analysis_eligible,
+      riskEvidence: c.risk_evidence ?? c.risk_reasons,
+      previousZone: c.previous_risk_zone,
+      observationVersion: c.created_at,
+      previousVitals: c.previous_observation
+        ? observationVitals(c.previous_observation)
+        : undefined,
       time: displayDate(
         c.follow_up_completed_at ??
           c.follow_up_at ??
@@ -304,11 +366,18 @@ export async function loadRegistry(): Promise<RegistryResult> {
     scheduledAt: c.scheduled_at,
     retryChannel: c.retry_channel,
     appointmentId: c.appointment_id,
+    appointmentStart: c.appointment_start,
     attempts: c.attempts,
   }));
   return {
     patients,
     calls,
+    demoStream: data.demo_stream ?? null,
+    demoAnalyses: Object.fromEntries(
+      data.cases.flatMap((c) =>
+        c.demo_analysis ? [[c.id, c.demo_analysis]] : [],
+      ),
+    ),
     appointments: (data.appointments ?? []).map((visit) => ({
       ...visit,
       practitioner: visit.practitioner
@@ -316,6 +385,7 @@ export async function loadRegistry(): Promise<RegistryResult> {
         : undefined,
     })),
     history: (data.attempt_history ?? []).sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at)),
+    availability: data.availability ?? [],
     source: data.mode,
     audit: data.audit ?? [],
   };
@@ -367,9 +437,10 @@ export function runScenario(
 
 export type FacilityResponse = {
   mode: "timed" | "untimed";
-  facility: string;
+  facility?: string;
   practitioner_id?: string;
   start?: string;
+  slot_id?: string;
   confirmed: boolean;
 };
 export function recordFacilityResponse(
@@ -384,4 +455,46 @@ export function recordFacilityResponse(
 }
 export function recordAttendance(visitId: string) {
   return request(`/api/visits/${encodeURIComponent(visitId)}/attended`, "POST");
+}
+
+export function approveReferral(caseId: string, practitionerId: string) {
+  return request(
+    `/api/referrals/${encodeURIComponent(caseId)}/approve`,
+    "POST",
+    { practitioner_id: practitionerId },
+  );
+}
+
+export type RiskExplanation = {
+  source: "rules" | "openrouter";
+  analyzer_status?: "not_configured" | "unavailable";
+  review_focus?:
+    "VERIFY_CHANGE" | "MISSING_OBSERVATIONS" | "SCREENING_FINDINGS";
+  zone: Patient["zone"];
+  reasons: string[];
+  model?: string;
+};
+export function explainRisk(caseId: string) {
+  return request<RiskExplanation>(
+    `/api/cases/${encodeURIComponent(caseId)}/explanation`,
+    "POST",
+    undefined,
+    20_000,
+  );
+}
+
+export function bookUrgentVisit(
+  caseId: string,
+  practitionerId: string,
+  start: string,
+) {
+  return request(
+    `/api/cases/${encodeURIComponent(caseId)}/urgent-visit`,
+    "POST",
+    { practitioner_id: practitionerId, start },
+  );
+}
+
+export function startDemoStream() {
+  return request<DemoStream>("/api/simulation/start", "POST");
 }
