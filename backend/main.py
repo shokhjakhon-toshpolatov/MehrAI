@@ -15,7 +15,7 @@ from fastapi import FastAPI, HTTPException, Header, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from .risk import evaluate
-from .seed import PATIENTS, DOCTORS
+from .seed import PATIENTS, DOCTORS, POSTPARTUM_SAMPLE_ASSESSMENTS
 
 DB = os.getenv('DMED_DB', str(Path(__file__).with_name('demo.sqlite3')))
 TZ = ZoneInfo('Asia/Tashkent')
@@ -80,6 +80,9 @@ def init():
                     'id': family_id, 'patient': patient_id,
                     'name': sample.get('mother_name', 'Family contact'), 'telecom': [],
                 })
+                assessment = POSTPARTUM_SAMPLE_ASSESSMENTS.get(patient_id)
+                if assessment:
+                    put(db, 'PostpartumAssessment', patient_id, {**assessment, 'assessed_at': stamp(now() - timedelta(days=1))})
                 ingest(db, patient_id, {'id': f'seed-{patient_id}', **sample['observation']})
             elif sample.get('mother_id'):
                 patient, version = get(db, 'Patient', patient_id)
@@ -107,7 +110,13 @@ def retire_legacy_slots(db):
 def ingest(db, patient_id, observation):
     patient,_ = get(db,'Patient',patient_id)
     oid = observation.get('id') or str(uuid4())
-    risk = evaluate(patient['cohort_type'],observation)
+    risk = evaluate(patient['cohort_type'], observation)
+    assessment = None
+    if patient['cohort_type'] == 'POSTPARTUM':
+        stored = db.execute("SELECT payload FROM resources WHERE kind='PostpartumAssessment' AND id=?", (patient_id,)).fetchone()
+        if stored:
+            assessment = json.loads(stored['payload'])
+            risk.update(risk_zone=assessment['zone'], risk_reasons=[assessment['reason']])
     key = hashlib.sha256(f"{patient_id}:{oid}:{risk['risk_zone']}".encode()).hexdigest()
     duplicate = db.execute('SELECT case_id FROM idempotency WHERE key=?',(key,)).fetchone()
     if duplicate: return get(db,'Case',duplicate['case_id'])[0]
@@ -152,6 +161,10 @@ def ingest(db, patient_id, observation):
             case['service_request_id']=sid
         else: case['status']='UNASSIGNED_REVIEW'
     if patient['cohort_type'] == 'POSTPARTUM':
+        if assessment:
+            case.update(assessment_at=assessment['assessed_at'],
+                        assessed_by=assessment['practitioner_id'],
+                        assigned_practitioner_id=assessment['practitioner_id'])
         case['status'] = 'POSTPARTUM_FOLLOW_UP'
         case['follow_up_at'] = (prior or {}).get('follow_up_at') or stamp(now() + timedelta(days=1))
         if prior and prior.get('follow_up_completed_at'):

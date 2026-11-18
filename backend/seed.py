@@ -4,9 +4,22 @@ PATIENTS = [
  {'id':'p3','name':'Mohira Rustamova','cohort_type':'MATERNAL','age':31,'gestational_weeks':34,'clinic':'42-sonli OP','telecom':[], 'observation':{'systolic':165,'diastolic':110,'baseline_systolic':110,'baseline_diastolic':70,'hemoglobin':112,'glucose':4.8,'proteinuria':'++'}},
  {'id':'p4','name':'Amirbek Nazarov','mother_name':'Nigora Nazarova','mother_id':'p5','cohort_type':'NEONATAL','age_days':5,'clinic':'15-sonli OP','telecom':[], 'observation':{'age_days':5,'bilirubin':238,'temperature':36.8,'spo2':98,'weight_loss':8.4,'feeding':'active'}},
  {'id':'p5','name':'Nigora Nazarova','cohort_type':'POSTPARTUM','age':28,'postpartum_days':5,'clinic':'15-sonli OP','telecom':[], 'observation':{}},
+ {'id':'p6','name':'Malika Usmonova','cohort_type':'POSTPARTUM','age':30,'postpartum_days':12,'clinic':'OVaBMU markazi','telecom':[], 'observation':{}},
+ {'id':'p7','name':'Soliha Usmonova','mother_name':'Malika Usmonova','mother_id':'p6','cohort_type':'NEONATAL','age_days':12,'clinic':'OVaBMU markazi','telecom':[],
+  'observation':{'age_days':12,'bilirubin':100,'temperature':36.7,'spo2':98,'weight_loss':3,'feeding':'active'}},
+
 ]
 DOCTORS = [
  {'id':'d1','name':'Dilnoza Rahimova','specialty':'OBGYN','duty_role':'primary_navbatchi','room':'204'},
  {'id':'d2','name':'Jamshid Karimov','specialty':'OBGYN','duty_role':'backup_navbatchi','room':'208'},
  {'id':'d3','name':'Malika Umarova','specialty':'ENDOCRINOLOGY','specialties':['ENDOCRINOLOGY','CARDIOLOGY'],'duty_role':'consultant','room':'105'},
  {'id':'d4','name':'Sardor Alimov','specialty':'NEONATOLOGY','duty_role':'primary_navbatchi','room':'112'}]
+
+# A clinician-entered sample assessment, separate from triage inputs.
+POSTPARTUM_SAMPLE_ASSESSMENTS = {
+    'p6': {
+        'zone': 'GREEN',
+        'practitioner_id': 'd1',
+        'reason': 'Klinik baholashda holat barqaror',
+    },
+}

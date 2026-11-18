@@ -4,7 +4,7 @@ export type Patient = {
   stage: string; clinic: string; zone: Zone; reason: string; vitals: string[];
   doctor: string; status: string; time: string;
   statusCode?: string; deadline?: string; updatedAt?: string; appointmentAt?: string; referralStatus?: string;
-  motherId?: string; followUpAt?: string; followUpCompletedAt?: string;
+  motherId?: string; followUpAt?: string; followUpCompletedAt?: string; assessedAt?: string; assessedBy?: string;
 };
 export type Doctor = { id: string; name: string; specialty: string; initials: string; role: string };
 export const doctors: Doctor[] = [
@@ -23,7 +23,7 @@ export const seedPatients: Patient[] = [
   { id: 'P-1007', name: 'Zarina Ergasheva', age: 27, cohort: 'MATERNAL', stage: '18-hafta', clinic: 'OVaBMU markazi', zone: 'GREEN', reason: 'Ko‘rsatkichlar me’yorda', vitals: ['AQB 110/70', 'Hb 121 g/L'], doctor: 'karimov', status: 'Rejali kuzatuv', time: '21-noyabr' },
   { id: 'P-1008', name: 'Muhammad Aliyev', age: 8, cohort: 'NEONATAL', stage: '8 kunlik', clinic: '15-sonli OP', zone: 'GREEN', reason: 'Rivojlanishi me’yorda', vitals: ['Harorat 36.6 °C', 'Vazn −3.2%'], doctor: 'alimov', status: 'Patronaj nazorati', time: '19-noyabr' },
   { id: 'P-1009', name: 'Nigora Nazarova', age: 28, cohort: 'POSTPARTUM', stage: 'Tug‘ruqdan keyin 5 kun', clinic: '15-sonli OP', zone: 'REVIEW', reason: 'Tug‘ruqdan keyingi ko‘rikni mutaxassis baholaydi', vitals: [], doctor: 'rahimova', status: 'Kuzatuv kutilmoqda', statusCode: 'POSTPARTUM_FOLLOW_UP', time: '19-noyabr' },
-  { id: 'P-1010', name: 'Malika Usmonova', age: 30, cohort: 'POSTPARTUM', stage: 'Tug‘ruqdan keyin 12 kun', clinic: 'OVaBMU markazi', zone: 'REVIEW', reason: 'Tug‘ruqdan keyingi ko‘rikni mutaxassis baholaydi', vitals: [], doctor: 'rahimova', status: 'Kuzatuv qayd etildi', statusCode: 'POSTPARTUM_FOLLOWED_UP', time: '17-noyabr' },
+  { id: 'P-1010', name: 'Malika Usmonova', age: 30, cohort: 'POSTPARTUM', stage: 'Tug‘ruqdan keyin 12 kun', clinic: 'OVaBMU markazi', zone: 'GREEN', reason: 'Klinik baholashda holat barqaror', assessedAt: '2026-11-17T11:00:00+05:00', assessedBy: 'rahimova', vitals: [], doctor: 'rahimova', status: 'Kuzatuv kutilmoqda', statusCode: 'POSTPARTUM_FOLLOW_UP', time: '19-noyabr' },
 
 ];
 export const zoneLabels: Record<Zone, string> = { RED: 'Yuqori xavf', YELLOW: 'Kuzatuv zarur', GREEN: 'Barqaror', REVIEW: 'Baholash kutilmoqda' };

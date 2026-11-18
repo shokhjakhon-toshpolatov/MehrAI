@@ -950,6 +950,16 @@ export default function Dashboard() {
                   <div className="detail-block">
                     <h3>Klinik ko‘rsatkichlar</h3>
                     <strong>{selected.reason}</strong>
+                    {selected.assessedAt && (
+                      <p className="sample-assessment">
+                        Namuna bahosi ·{" "}
+                        {selected.assessedBy
+                          ? (doctorNames[selected.assessedBy] ??
+                            selected.assessedBy)
+                          : "Mutaxassis"}{" "}
+                        · {formatDate(selected.assessedAt)}
+                      </p>
+                    )}
                     <div className="vital-cards">
                       {selected.vitals.length === 0 && (
                         <p>Ko‘rsatkichlar kiritilmagan.</p>

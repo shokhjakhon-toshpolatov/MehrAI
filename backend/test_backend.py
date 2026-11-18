@@ -80,6 +80,18 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(refreshed['p5']['follow_up_completed_at'], complete['follow_up_completed_at'])
         self.assertEqual(refreshed['p4']['referral_status'], 'AWAITING_FACILITY')
 
+    def test_postpartum_sample_assessment_does_not_complete_follow_up(self):
+        data = self.client.get('/api/registry').json()
+        cases = {record['id']: record for record in data['cases']}
+        patients = {record['id']: record for record in data['patients']}
+        self.assertEqual(cases['p5']['risk_zone'], 'REVIEW')
+        self.assertEqual(cases['p6']['risk_zone'], 'GREEN')
+        self.assertEqual(cases['p6']['assessed_by'], 'd1')
+        self.assertIn('assessment_at', cases['p6'])
+        self.assertEqual(cases['p6']['status'], 'POSTPARTUM_FOLLOW_UP')
+        self.assertEqual(patients['p7']['mother_id'], 'p6')
+        self.assertEqual(cases['p7']['status'], 'ROUTINE')
+
     def test_seed_and_routing(self):
         data=self.client.get('/api/registry').json()
         cases={c['id']:c for c in data['cases']}

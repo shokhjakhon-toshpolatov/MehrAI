@@ -66,6 +66,8 @@ type ApiCase = {
   referral_status?: string;
   follow_up_at?: string;
   follow_up_completed_at?: string;
+  assessment_at?: string;
+  assessed_by?: string;
 };
 type ApiCall = {
   id: string;
@@ -242,6 +244,10 @@ export async function loadRegistry(): Promise<RegistryResult> {
             ? `Tug‘ruqdan keyin ${p.postpartum_days ?? "—"} kun`
             : `${p.gestational_weeks ?? "—"}-hafta`,
       motherId: p.mother_id,
+      assessedAt: c.assessment_at,
+      assessedBy: c.assessed_by
+        ? (doctorIds[c.assessed_by] ?? c.assessed_by)
+        : undefined,
       followUpAt: c.follow_up_at,
       followUpCompletedAt: c.follow_up_completed_at,
       clinic: p.clinic,
