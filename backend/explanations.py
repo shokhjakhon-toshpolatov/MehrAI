@@ -22,21 +22,29 @@ def numeric_observations(observation):
     }
 
 
-def explain_case(case: dict) -> dict:
-    reasons = case['risk_reasons'] or ['Namuna qoidasi bo‘yicha xavf belgisi topilmadi']
-    fallback = {'source': 'rules', 'zone': case['risk_zone'], 'reasons': reasons}
-    key = os.getenv('OPENROUTER_API_KEY', '').strip()
-    model = os.getenv('MEHRAI_OPENROUTER_MODEL', '').strip() or DEFAULT_MODEL
+def measured_changes(case):
     current = numeric_observations(case.get('observation') or {})
     previous = numeric_observations(case.get('previous_observation') or {})
-    changes = {
+    return {
         key: {'before': previous[key], 'after': value}
         for key, value in current.items() if key in previous and value != previous[key]
     }
-    changed_urgent = case['risk_zone'] == 'RED' and case.get('previous_risk_zone') not in (None, 'RED')
-    if ((case['risk_zone'] == 'RED' and not changed_urgent)
-            or (len(reasons) < 2 and not changes) or os.getenv('DMED_MODE', 'mock') != 'mock'):
+
+
+def analysis_eligible(case, changes):
+    unchanged_urgent = case['risk_zone'] == 'RED' and case.get('previous_risk_zone') in (None, 'RED')
+    return (not unchanged_urgent and (len(case['risk_reasons']) >= 2 or bool(changes))
+            and os.getenv('DMED_MODE', 'mock') == 'mock')
+
+
+def explain_case(case: dict) -> dict:
+    reasons = case['risk_reasons'] or ['Namuna qoidasi bo‘yicha xavf belgisi topilmadi']
+    fallback = {'source': 'rules', 'zone': case['risk_zone'], 'reasons': reasons}
+    changes = measured_changes(case)
+    if not analysis_eligible(case, changes):
         return fallback
+    key = os.getenv('OPENROUTER_API_KEY', '').strip()
+    model = os.getenv('MEHRAI_OPENROUTER_MODEL', '').strip() or DEFAULT_MODEL
     allowed_focus = ['SCREENING_FINDINGS']
     if changes:
         allowed_focus.append('VERIFY_CHANGE')

@@ -31,9 +31,10 @@ import {
   loadRegistry,
   performCaseAction,
   approveReferral,
-  approveUrgentOutreach,
+  bookUrgentVisit,
   explainRisk,
   startDemoStream,
+  observationVitals,
   type DemoAnalysis,
   type DemoStream,
   type RiskExplanation,
@@ -80,6 +81,7 @@ export default function Dashboard() {
   const [risk, setRisk] = useState("ALL");
   const [selected, setSelected] = useState<Patient | null>(null);
   const [sim, setSim] = useState(false);
+  const [showDemoRun, setShowDemoRun] = useState(false);
   const [toast, setToast] = useState("");
   const [tab, setTab] = useState("overview");
   const [notifications, setNotifications] = useState(false);
@@ -93,6 +95,7 @@ export default function Dashboard() {
     patientId?: string;
   } | null>(null);
   const [bookingError, setBookingError] = useState("");
+  const [urgentBookingOpen, setUrgentBookingOpen] = useState(false);
   const [clock, setClock] = useState(0);
   const requestVersion = useRef(0);
   const refresh = useCallback(async () => {
@@ -120,7 +123,9 @@ export default function Dashboard() {
   const streamActive =
     data?.demoStream?.status === "STREAMING" ||
     data?.demoStream?.events.some(
-      (event) => event.analysis_status === "PENDING",
+      (event) =>
+        event.analysis_status === "PENDING" ||
+        event.analysis_status === "RUNNING",
     ) ||
     false;
   const fastRefresh = demoCallActive || streamActive;
@@ -136,7 +141,7 @@ export default function Dashboard() {
   }, [refresh, fastRefresh]);
   useEffect(() => {
     const close = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
+      if (e.key === "Escape" && !document.querySelector("dialog[open]")) {
         setSelected(null);
         setSim(false);
         setNotifications(false);
@@ -168,6 +173,7 @@ export default function Dashboard() {
   const runStreamDemo = () =>
     save(async () => {
       await startDemoStream();
+      setShowDemoRun(true);
       setSim(false);
       setSelected(null);
       setPersona("district");
@@ -213,6 +219,13 @@ export default function Dashboard() {
       visit.patient === selected?.id &&
       ["proposed", "booked", "untimed"].includes(visit.status),
   );
+  const canBookUrgent =
+    selected?.zone === "RED" &&
+    !selectedVisit &&
+    Boolean(selected.doctor) &&
+    ["PENDING_DOCTOR_ACK", "ESCALATED", "DOCTOR_ACCEPTED"].includes(
+      selected.statusCode ?? "",
+    );
   const availability = data?.availability ?? [];
   const availableSlots = availability.filter((slot) => slot.available);
   const scheduleDoctor =
@@ -257,6 +270,7 @@ export default function Dashboard() {
           demo_call_completed: "Sinov qo‘ng‘irog‘i yakunlandi",
           call: "Aloqa vazifasi yaratildi",
           facility_response: "Muassasa javobi qayd etildi",
+          urgent_visit_booked: "Shoshilinch qabul belgilandi",
           postpartum_follow_up: "Tug‘ruqdan keyingi kuzatuv qayd etildi",
           attendance: "Tashrif holati qayd etildi",
         }[e.action] ?? "Holat yangilandi"),
@@ -422,18 +436,6 @@ export default function Dashboard() {
                 <Zap size={16} />
                 Demo simulyator
               </button>
-              {tab === "overview" && (
-                <button
-                  className="button primary"
-                  disabled={offline || working || streamActive}
-                  onClick={runStreamDemo}
-                >
-                  <Activity size={17} />
-                  {streamActive
-                    ? "Ma’lumotlar oqimi davom etmoqda"
-                    : "Ma’lumotlar oqimini boshlash"}
-                </button>
-              )}
             </div>
           </div>
           <div className="context-bar">
@@ -467,6 +469,18 @@ export default function Dashboard() {
               ? "Server ulanmagan · saqlash va ma’lumotlar oqimi uchun mahalliy API’ni ishga tushiring."
               : "Server ulangan · sun’iy ma’lumotlar · tashqi qo‘ng‘iroqlar o‘chirilgan"}
           </div>
+          {tab === "overview" && (
+            <ObservationFeed
+              stream={showDemoRun || streamActive ? data?.demoStream : null}
+              active={streamActive}
+              disabled={offline || working}
+              onStart={runStreamDemo}
+              onOpen={(id) => {
+                const patient = patients.find((p) => p.id === id);
+                if (patient) setSelected(patient);
+              }}
+            />
+          )}
           {tab === "overview" && (
             <section className="stats-grid">
               <button
@@ -556,15 +570,6 @@ export default function Dashboard() {
                 </button>
               ))}
             </section>
-          )}
-          {tab === "overview" && data?.demoStream && (
-            <ObservationFeed
-              stream={data.demoStream}
-              onOpen={(id) => {
-                const patient = patients.find((p) => p.id === id);
-                if (patient) setSelected(patient);
-              }}
-            />
           )}
           {tab === "overview" && (
             <>
@@ -1014,6 +1019,9 @@ export default function Dashboard() {
                           : ""}{" "}
                         · {c.attempts} urinish · {formatDate(c.scheduledAt)}
                       </p>
+                      {c.appointmentStart && (
+                        <p>Qabul vaqti · {formatDate(c.appointmentStart)}</p>
+                      )}
                     </div>
                     <strong>{c.statusLabel}</strong>
                   </article>
@@ -1140,16 +1148,39 @@ export default function Dashboard() {
           }
         />
       )}
+      {urgentBookingOpen && selected && (
+        <UrgentBookingDialog
+          patient={selected}
+          slots={availableSlots.filter(
+            (slot) => slot.practitioner_id === practitionerIds[selected.doctor],
+          )}
+          disabled={offline || working || !canBookUrgent}
+          error={bookingError}
+          working={working}
+          onClose={() => setUrgentBookingOpen(false)}
+          onBook={(start) =>
+            save(async () => {
+              setBookingError("");
+              await bookUrgentVisit(
+                selected.id,
+                practitionerIds[selected.doctor],
+                start,
+              );
+              setUrgentBookingOpen(false);
+            }, setBookingError)
+          }
+        />
+      )}
       {(selected || sim) && (
         <div
-          className="overlay"
+          className={sim ? "overlay" : "overlay patient-overlay"}
           onClick={() => {
             setSelected(null);
             setSim(false);
           }}
         >
           <section
-            className="drawer"
+            className={sim ? "drawer" : "drawer patient-dialog"}
             role="dialog"
             aria-modal="true"
             aria-label={sim ? "Demo simulyator" : "Bemor tafsilotlari"}
@@ -1234,30 +1265,27 @@ export default function Dashboard() {
             ) : (
               selected && (
                 <>
-                  <div
-                    className={`patient-large-avatar ${selected.zone.toLowerCase()}`}
-                  >
-                    {selected.name
-                      .split(" ")
-                      .map((n) => n[0])
-                      .slice(0, 2)
-                      .join("")}
-                  </div>
                   <h2>{selected.name}</h2>
                   <p className="drawer-intro">
                     {selected.stage} · {selected.clinic}
                   </p>
-                  <span
-                    className={`badge ${selected.zone === "RED" ? "red" : selected.zone === "GREEN" ? "green" : selected.zone === "REVIEW" ? "zone-review" : "amber"}`}
-                  >
-                    {selected.zone === "RED"
-                      ? "Qizil zona"
-                      : selected.zone === "YELLOW"
-                        ? "Sariq zona"
-                        : selected.zone === "REVIEW"
-                          ? "Baholash kutilmoqda"
-                          : "Yashil zona"}
-                  </span>
+                  <div className="patient-dialog-status">
+                    <span
+                      className={`badge ${selected.zone === "RED" ? "red" : selected.zone === "GREEN" ? "green" : selected.zone === "REVIEW" ? "zone-review" : "amber"}`}
+                    >
+                      {selected.zone === "RED"
+                        ? "Qizil zona"
+                        : selected.zone === "YELLOW"
+                          ? "Sariq zona"
+                          : selected.zone === "REVIEW"
+                            ? zoneLabels.REVIEW
+                            : "Yashil zona"}
+                    </span>
+                    {doctorNames[selected.doctor] && (
+                      <span>{doctorNames[selected.doctor]}</span>
+                    )}
+                    <span>{selected.status}</span>
+                  </div>
                   {selected.previousZone &&
                     selected.previousZone !== selected.zone && (
                       <div className="detail-block">
@@ -1273,7 +1301,6 @@ export default function Dashboard() {
                     )}
                   <div className="detail-block">
                     <h3>Klinik ko‘rsatkichlar</h3>
-                    <strong>{selected.reason}</strong>
                     {selected.assessedAt && (
                       <p className="sample-assessment">
                         Namuna bahosi ·{" "}
@@ -1295,41 +1322,31 @@ export default function Dashboard() {
                         </div>
                       ))}
                     </div>
-                    <small>
-                      Demo qoidalari asosida · klinik foydalanish uchun
-                      tasdiqlanmagan
-                    </small>
                   </div>
-                  <div className="detail-block">
-                    <h3>Biriktirilgan mutaxassis</h3>
-                    <div className="doctor-detail">
-                      <span className="user-avatar">
-                        <Stethoscope size={22} />
-                      </span>
-                      <div>
-                        <strong>
-                          {doctorNames[selected.doctor] || "Biriktirilmagan"}
-                        </strong>
-                        <p>{selected.status}</p>
-                      </div>
-                    </div>
-                  </div>
-                  {[
-                    "PENDING_DOCTOR_ACK",
-                    "ESCALATED",
-                    "REVIEW_REQUIRED",
-                  ].includes(selected.statusCode ?? "") && (
+                  {(canBookUrgent ||
+                    selected.statusCode === "REVIEW_REQUIRED") && (
                     <div className="button-row">
                       <button
                         className="button primary"
                         disabled={offline || working}
-                        onClick={() =>
-                          save(() => performCaseAction(selected.id, "accept"))
-                        }
+                        onClick={() => {
+                          if (canBookUrgent) {
+                            setBookingError("");
+                            setUrgentBookingOpen(true);
+                          } else {
+                            void save(() =>
+                              performCaseAction(selected.id, "accept"),
+                            );
+                          }
+                        }}
                       >
-                        <CheckCheck size={17} />
-                        {selected.zone === "RED"
-                          ? "Shoshilinch ko‘rikni qayd etish"
+                        {canBookUrgent ? (
+                          <CalendarDays size={17} />
+                        ) : (
+                          <CheckCheck size={17} />
+                        )}
+                        {canBookUrgent
+                          ? "Qabul belgilash"
                           : "Ko‘rib chiqilganini qayd etish"}
                       </button>
                       {isPending(selected) && (
@@ -1425,11 +1442,10 @@ export default function Dashboard() {
                     </h3>
                     <p>
                       Aloqa oluvchi:{" "}
-                      {selected.cohort === "NEONATAL"
-                        ? "Chaqaloqning onasi"
-                        : selected.zone === "RED"
-                          ? "Oila a’zosi"
-                          : "Bemor"}
+                      {latestCall?.target ??
+                        (selected.cohort === "NEONATAL"
+                          ? "Chaqaloqning onasi"
+                          : "Bemor")}
                     </p>
                     {selected.cohort === "NEONATAL" && (
                       <p>
@@ -1446,42 +1462,14 @@ export default function Dashboard() {
                         <strong>{latestCall.statusLabel}</strong>
                       </p>
                     )}
-                    {selected.zone === "RED" ? (
-                      selected.urgentOutreachApprovedAt ? null : selected.statusCode !==
-                        "DOCTOR_ACCEPTED" ? (
-                        <p>Avval shoshilinch holatni ko‘rib chiqing.</p>
-                      ) : persona !== selected.doctor ? (
-                        <button
-                          className="button"
-                          disabled={!selected.doctor}
-                          onClick={() => setPersona(selected.doctor)}
-                        >
-                          Mas’ul shifokor ko‘rinishiga o‘tish
-                        </button>
-                      ) : (
-                        <button
-                          className="button primary"
-                          disabled={offline || working}
-                          onClick={() =>
-                            save(() =>
-                              approveUrgentOutreach(
-                                selected.id,
-                                practitionerIds[selected.doctor],
-                              ),
-                            )
-                          }
-                        >
-                          <Phone size={15} /> AI qo‘ng‘irog‘iga ruxsat berish
-                        </button>
-                      )
-                    ) : selected.zone === "YELLOW" &&
+                    {(selected.zone === "YELLOW" || canBookUrgent) &&
                       !selectedVisit &&
-                      !latestCall ? (
-                      <p>
-                        Shifokor yo‘llanmani tasdiqlab, qabul vaqti saqlangach,
-                        AI bemorga avtomatik qo‘ng‘iroq qiladi.
-                      </p>
-                    ) : null}
+                      !latestCall && (
+                        <p>
+                          AI qabul sanasi va vaqtini avtomatik qo‘ng‘iroqda
+                          aytadi.
+                        </p>
+                      )}
                   </div>
                   {isAwaitingFacility(selected) && (
                     <FacilityResponseForm
@@ -1566,58 +1554,142 @@ export default function Dashboard() {
 }
 function ObservationFeed({
   stream,
+  active,
+  disabled,
+  onStart,
   onOpen,
 }: {
-  stream: DemoStream;
+  stream?: DemoStream | null;
+  active: boolean;
+  disabled: boolean;
+  onStart: () => void;
   onOpen: (id: string) => void;
 }) {
   return (
     <section className="panel demo-feed" aria-labelledby="demo-feed-title">
       <div className="panel-heading">
         <div>
-          <h2 id="demo-feed-title">Sinov IT-MED ma’lumotlar oqimi</h2>
-          <p>Namuna kuzatuvlari · /dmed/v2/Observation</p>
+          <h2 id="demo-feed-title">
+            <Activity size={21} /> Sinov ma’lumotlari oqimi
+          </h2>
+          <p>
+            Kuzatuv keladi, avvalgi o‘lchovlar bilan solishtiriladi va AI
+            dalillarni ko‘rib chiqadi.
+          </p>
         </div>
-        <span className="badge blue" role="status">
-          {stream.events.length}/{stream.total} ·{" "}
-          {stream.status === "STREAMING" ? "Qabul qilinmoqda" : "Yakunlandi"}
-        </span>
+        <button
+          className="button primary demo-feed-start"
+          disabled={disabled || active}
+          onClick={onStart}
+        >
+          <Zap size={16} />{" "}
+          {active
+            ? "Oqim davom etmoqda"
+            : stream
+              ? "Oqimni qayta boshlash"
+              : "Ma’lumotlar oqimini boshlash"}
+        </button>
       </div>
-      {stream.events.length === 0 && (
-        <p className="workflow-empty">Birinchi namuna kuzatuvi kutilmoqda.</p>
+      {stream && (
+        <div className="demo-feed-progress" role="status">
+          <progress
+            aria-label="Kuzatuvlar soni"
+            value={stream.events.length}
+            max={stream.total}
+          />
+          <span>
+            {stream.events.length}/{stream.total} kuzatuv ·{" "}
+            {active ? "Jarayon davom etmoqda" : "Yakunlandi"}
+          </span>
+        </div>
       )}
-      {stream.events
-        .slice()
-        .reverse()
-        .map((event) => (
-          <button
-            key={event.id}
-            className="appointment-row demo-feed-row"
-            onClick={() => onOpen(event.patient_id)}
-          >
-            <span className={`zone-badge zone-${event.zone.toLowerCase()}`}>
-              {zoneLabels[event.zone]}
-            </span>
-            <div>
-              <strong>{event.patient_name}</strong>
-              <p>
-                {event.previous_zone && event.previous_zone !== event.zone
-                  ? `${zoneLabels[event.previous_zone]} → ${zoneLabels[event.zone]}`
-                  : "Yangi kuzatuv qabul qilindi"}
-              </p>
-            </div>
-            <span>
-              {event.analysis_status === "PENDING"
-                ? "Tahlil kutilmoqda"
+      {!stream?.events.length && (
+        <p className="demo-feed-empty">
+          {stream ? "Birinchi kuzatuv kutilmoqda…" : "Hali kuzatuv kelmagan."}
+        </p>
+      )}
+      <div className="demo-feed-events">
+        {stream?.events
+          .slice()
+          .reverse()
+          .map((event) => {
+            const before = observationVitals(event.previous_observation ?? {});
+            const after = observationVitals(event.observation ?? {});
+            const running = event.analysis_status === "RUNNING";
+            const reviewLabel = running
+              ? "AI tahlil qilmoqda…"
+              : event.analysis_status === "PENDING"
+                ? "Tekshiruv navbatda"
                 : event.analysis_source === "openrouter"
-                  ? "AI tekshirdi"
+                  ? "AI ko‘rib chiqdi"
                   : event.analysis_status === "SUPERSEDED"
-                    ? "Yangi kuzatuv bor"
-                    : "Qoida bo‘yicha baholandi"}
-            </span>
-            <ChevronRight size={16} />
-          </button>
-        ))}
+                    ? "Yangi kuzatuv bilan almashtirildi"
+                    : event.analysis_unavailable
+                      ? "AI mavjud emas · qoida natijasi"
+                      : "Qoida bo‘yicha baholandi";
+            return (
+              <article className="demo-feed-row" key={event.id}>
+                <div className="demo-event-heading">
+                  <button
+                    className="patient-name"
+                    onClick={() => onOpen(event.patient_id)}
+                  >
+                    {event.patient_name} <ChevronRight size={13} />
+                  </button>
+                  <span
+                    className={`zone-badge ${event.zone === "REVIEW" ? "zone-review" : `zone-${event.zone.toLowerCase()}`}`}
+                  >
+                    {event.previous_zone &&
+                      event.previous_zone !== event.zone &&
+                      `${zoneLabels[event.previous_zone]} → `}
+                    {zoneLabels[event.zone]}
+                  </span>
+                </div>
+                {after.length > 0 && (
+                  <dl className="demo-comparison">
+                    <div>
+                      <dt>Avvalgi o‘lchovlar</dt>
+                      <dd>{before.join(" · ") || "Mavjud emas"}</dd>
+                    </div>
+                    <div>
+                      <dt>Yangi o‘lchovlar</dt>
+                      <dd>
+                        {after.map((value) => (
+                          <span
+                            key={value}
+                            className={
+                              before.includes(value)
+                                ? undefined
+                                : "demo-measurement-changed"
+                            }
+                          >
+                            {value}
+                          </span>
+                        ))}
+                      </dd>
+                    </div>
+                  </dl>
+                )}
+                <div className="demo-event-review" role="status">
+                  <span
+                    className={`badge ${event.analysis_source === "openrouter" ? "green" : "blue"}`}
+                  >
+                    {running && (
+                      <span
+                        className="demo-analysis-spinner"
+                        aria-hidden="true"
+                      />
+                    )}
+                    {reviewLabel}
+                  </span>
+                  {event.analysis_reason && (
+                    <span>{event.analysis_reason}</span>
+                  )}
+                </div>
+              </article>
+            );
+          })}
+      </div>
     </section>
   );
 }
@@ -1636,11 +1708,10 @@ function CaseRationale({
   >(null);
   const [loading, setLoading] = useState(false);
   const current =
-    analysis?.result ??
-    (result?.zone === patient.zone &&
+    result?.zone === patient.zone &&
     result.observationVersion === patient.observationVersion
       ? result
-      : null);
+      : analysis?.result;
   const autoRequested = useRef<string | undefined>(undefined);
   const load = useCallback(async () => {
     setLoading(true);
@@ -1653,17 +1724,27 @@ function CaseRationale({
       setResult({
         source: "rules",
         zone: patient.zone,
-        reasons: [patient.reason],
+        reasons: patient.riskEvidence?.length
+          ? patient.riskEvidence
+          : [patient.reason],
+        analyzer_status: "unavailable",
         observationVersion: patient.observationVersion,
       });
     } finally {
       setLoading(false);
     }
-  }, [patient.id, patient.observationVersion, patient.zone, patient.reason]);
+  }, [
+    patient.id,
+    patient.observationVersion,
+    patient.zone,
+    patient.reason,
+    patient.riskEvidence,
+  ]);
   useEffect(() => {
     if (
       offline ||
       analysis ||
+      !patient.analysisEligible ||
       patient.zone !== "RED" ||
       !patient.previousZone ||
       patient.previousZone === "RED" ||
@@ -1676,19 +1757,33 @@ function CaseRationale({
   }, [
     offline,
     analysis,
+    patient.analysisEligible,
     patient.zone,
     patient.previousZone,
     patient.observationVersion,
     load,
   ]);
+  const reasons =
+    current?.reasons ??
+    (patient.riskEvidence?.length ? patient.riskEvidence : [patient.reason]);
   return (
     <div className="detail-block case-rationale">
       <h3>Xavf belgisi sababi</h3>
       <ul>
-        {(current?.reasons ?? [patient.reason]).map((reason, index) => (
+        {reasons.slice(0, 2).map((reason, index) => (
           <li key={index}>{reason}</li>
         ))}
       </ul>
+      {reasons.length > 2 && (
+        <details>
+          <summary>Qolgan dalillar</summary>
+          <ul>
+            {reasons.slice(2).map((reason, index) => (
+              <li key={index}>{reason}</li>
+            ))}
+          </ul>
+        </details>
+      )}
       <small>
         {patient.assessedAt
           ? "Namuna mutaxassis bahosi"
@@ -1696,24 +1791,26 @@ function CaseRationale({
             ? `AI tahlilchi · ${current.model}`
             : "Namuna qoidalari asosida"}
       </small>
-      {current?.source === "openrouter" && current.review_focus && (
-        <p className="sample-assessment">
-          Shifokor uchun:{" "}
-          {
+      {current?.source === "openrouter" &&
+        (current.review_focus === "VERIFY_CHANGE" ||
+          current.review_focus === "MISSING_OBSERVATIONS") && (
+          <p className="sample-assessment">
+            Shifokor uchun:{" "}
             {
-              VERIFY_CHANGE:
-                "Avvalgi va yangi ko‘rsatkichlar o‘rtasidagi o‘zgarishni tekshiring.",
-              MISSING_OBSERVATIONS:
-                "Yetishmayotgan kuzatuv ma’lumotlarini tekshiring.",
-              SCREENING_FINDINGS:
-                "Qoidalar belgilagan dalillarni ko‘rib chiqing.",
-            }[current.review_focus]
-          }
-        </p>
-      )}
-      {analysis?.status === "PENDING" && (
+              {
+                VERIFY_CHANGE:
+                  "Avvalgi va yangi ko‘rsatkichlar o‘rtasidagi o‘zgarishni tekshiring.",
+                MISSING_OBSERVATIONS:
+                  "Yetishmayotgan kuzatuv ma’lumotlarini tekshiring.",
+              }[current.review_focus]
+            }
+          </p>
+        )}
+      {(analysis?.status === "PENDING" || analysis?.status === "RUNNING") && (
         <p className="sample-assessment" role="status">
-          AI tahlilchi yangi kuzatuvni tekshirmoqda.
+          {analysis.status === "RUNNING"
+            ? "AI tahlilchi yangi kuzatuvni tekshirmoqda."
+            : "Kuzatuv tekshiruv navbatida."}
         </p>
       )}
       {current?.analyzer_status && (
@@ -1723,18 +1820,30 @@ function CaseRationale({
             : "AI tahlili vaqtincha mavjud emas. Qoida dalillari ko‘rsatilmoqda."}
         </p>
       )}
+      {patient.analysisEligible === false && !patient.assessedAt && (
+        <p className="sample-assessment">
+          {patient.zone === "RED"
+            ? "AI tahlili xavf darajasi qizilga o‘zgarganda ishga tushadi."
+            : "AI tahlili uchun yangi o‘lchov o‘zgarishi yoki bir nechta klinik dalil kerak."}
+        </p>
+      )}
       {!offline &&
-        !analysis &&
+        analysis?.status !== "PENDING" &&
+        analysis?.status !== "RUNNING" &&
+        current?.source !== "openrouter" &&
         !patient.assessedAt &&
-        (patient.zone !== "RED" ||
-          (patient.previousZone && patient.previousZone !== "RED")) && (
+        patient.analysisEligible && (
           <button
             type="button"
             className="button"
             disabled={loading}
             onClick={load}
           >
-            {loading ? "Dalillar ko‘rib chiqilmoqda…" : "AI tahlilini olish"}
+            {loading
+              ? "Dalillar ko‘rib chiqilmoqda…"
+              : current?.analyzer_status
+                ? "AI tahlilini qayta olish"
+                : "AI tahlilini olish"}
           </button>
         )}
     </div>
@@ -1746,6 +1855,121 @@ function isAwaitingFacility(patient: Patient) {
     patient.referralApprovedAt &&
     (patient.referralStatus === "AWAITING_FACILITY" ||
       patient.referralStatus === "RESCHEDULE_REQUESTED"),
+  );
+}
+
+function UrgentBookingDialog({
+  patient,
+  slots,
+  disabled,
+  error,
+  working,
+  onClose,
+  onBook,
+}: {
+  patient: Patient;
+  slots: AvailabilitySlot[];
+  disabled: boolean;
+  error: string;
+  working: boolean;
+  onClose: () => void;
+  onBook: (start: string) => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [slotId, setSlotId] = useState("");
+  const [customTime, setCustomTime] = useState(false);
+  const slot = slots.find((entry) => entry.id === slotId);
+  const enterTime = customTime || !slots.length;
+  useEffect(() => {
+    dialog.current?.showModal();
+  }, []);
+  return (
+    <dialog
+      className="booking-dialog"
+      ref={dialog}
+      aria-labelledby="urgent-booking-title"
+      onCancel={(event) => {
+        event.preventDefault();
+        if (!working) onClose();
+      }}
+    >
+      <div className="booking-heading">
+        <h2 id="urgent-booking-title">Shoshilinch qabul belgilash</h2>
+        <button
+          className="icon-button"
+          aria-label="Yopish"
+          disabled={working}
+          onClick={onClose}
+        >
+          <X size={20} />
+        </button>
+      </div>
+      <p className="booking-slot">
+        <strong>{patient.name}</strong>
+        <span>{doctorNames[patient.doctor]} · OVaBMU markazi</span>
+      </p>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (disabled) return;
+          const data = new FormData(event.currentTarget);
+          const start = enterTime
+            ? `${data.get("date")}T${data.get("time")}+05:00`
+            : slot?.start;
+          if (start) onBook(start);
+        }}
+      >
+        {!enterTime && (
+          <BookingTimes
+            slots={slots}
+            value={slotId}
+            disabled={working}
+            onChange={setSlotId}
+          />
+        )}
+        {slots.length > 0 && (
+          <button
+            className="text-button booking-more"
+            type="button"
+            disabled={working}
+            onClick={() => setCustomTime(!customTime)}
+          >
+            {customTime ? "Bo‘sh vaqtlarga qaytish" : "Boshqa vaqt kiritish"}
+          </button>
+        )}
+        {enterTime && (
+          <div className="facility-time-fields">
+            <label className="booking-patient">
+              Qabul sanasi
+              <input name="date" type="date" required disabled={working} />
+            </label>
+            <label className="booking-patient">
+              Vaqti (Toshkent)
+              <input name="time" type="time" required disabled={working} />
+            </label>
+          </div>
+        )}
+        <p>
+          AI{" "}
+          {patient.cohort === "NEONATAL" ? "chaqaloqning onasiga" : "bemorga"}{" "}
+          sinov qo‘ng‘irog‘ida qabul sanasi va vaqtini aytadi.
+        </p>
+        {error && (
+          <p className="booking-error" role="alert">
+            {error}
+          </p>
+        )}
+        <button
+          className="button primary"
+          type="submit"
+          disabled={disabled || (!enterTime && !slot)}
+        >
+          {working
+            ? "Saqlanmoqda…"
+            : "Qabulni saqlash va AI qo‘ng‘irog‘ini boshlash"}
+        </button>
+      </form>
+    </dialog>
   );
 }
 
@@ -1780,6 +2004,12 @@ function BookingDialog({
   const patient = patients.find((entry) => entry.id === patientId);
   const slot = slots.find((entry) => entry.id === slotId);
   const unavailable = offline || Boolean(slotId && !slot);
+  const suggestedSlots = slots.filter(
+    (entry) => entry.practitioner_id === practitionerIds[patient?.doctor ?? ""],
+  );
+  const displayedDoctor =
+    slot?.practitioner_id ?? suggestedSlots[0]?.practitioner_id;
+  const displayedFacility = slot?.facility ?? suggestedSlots[0]?.facility;
   useEffect(() => {
     dialog.current?.showModal();
   }, []);
@@ -1845,28 +2075,48 @@ function BookingDialog({
           <p>Qabul belgilash uchun yo‘llanma mavjud emas.</p>
         )}
         {!initialSlot && (
-          <label className="booking-patient">
-            Shifokor va qabul vaqti
-            <select
-              required
-              value={slot?.id ?? ""}
-              disabled={working}
-              onChange={(event) => setSlotId(event.target.value)}
+          <>
+            {displayedDoctor && displayedFacility && (
+              <p className="booking-slot">
+                {doctorById[displayedDoctor]} · {displayedFacility}
+              </p>
+            )}
+            {suggestedSlots.length > 0 && (
+              <BookingTimes
+                slots={suggestedSlots}
+                value={slotId}
+                disabled={working}
+                onChange={setSlotId}
+              />
+            )}
+            <details
+              className="booking-more"
+              open={suggestedSlots.length === 0 || undefined}
             >
-              <option value="">Bo‘sh vaqtni tanlang</option>
-              {Object.entries(doctorById).map(([id, name]) => (
-                <optgroup key={id} label={name}>
-                  {slots
-                    .filter((entry) => entry.practitioner_id === id)
-                    .map((entry) => (
-                      <option key={entry.id} value={entry.id}>
-                        {formatDate(entry.start)} · {entry.facility}
-                      </option>
-                    ))}
-                </optgroup>
-              ))}
-            </select>
-          </label>
+              <summary>Boshqa shifokor yoki vaqt</summary>
+              <label className="booking-patient">
+                Shifokor va qabul vaqti
+                <select
+                  value={slot?.id ?? ""}
+                  disabled={working}
+                  onChange={(event) => setSlotId(event.target.value)}
+                >
+                  <option value="">Bo‘sh vaqtni tanlang</option>
+                  {Object.entries(doctorById).map(([id, name]) => (
+                    <optgroup key={id} label={name}>
+                      {slots
+                        .filter((entry) => entry.practitioner_id === id)
+                        .map((entry) => (
+                          <option key={entry.id} value={entry.id}>
+                            {formatDate(entry.start)} · {entry.facility}
+                          </option>
+                        ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </label>
+            </details>
+          </>
         )}
         {patient && (
           <>
@@ -1910,6 +2160,37 @@ function BookingDialog({
         </button>
       </form>
     </dialog>
+  );
+}
+
+function BookingTimes({
+  slots,
+  value,
+  disabled,
+  onChange,
+}: {
+  slots: AvailabilitySlot[];
+  value: string;
+  disabled: boolean;
+  onChange: (id: string) => void;
+}) {
+  return (
+    <fieldset className="booking-times" disabled={disabled}>
+      <legend>Eng yaqin bo‘sh vaqtlar (Toshkent)</legend>
+      <div>
+        {slots.slice(0, 3).map((slot) => (
+          <button
+            key={slot.id}
+            className="button"
+            type="button"
+            aria-pressed={slot.id === value}
+            onClick={() => onChange(slot.id)}
+          >
+            {formatDate(slot.start)}
+          </button>
+        ))}
+      </div>
+    </fieldset>
   );
 }
 

@@ -24,6 +24,14 @@ Click **Qabul belgilash** on an eligible patient card or beside a free time in *
 
 Set `OPENROUTER_API_KEY` in the backend environment, then restart Uvicorn. The default model is [Qwen3.6 27B](https://openrouter.ai/qwen/qwen3.6-27b). Optionally set `MEHRAI_OPENROUTER_MODEL` to another supported OpenRouter model. The key stays on the server. Keep it out of source control and frontend environment variables.
 
+If you store the key in the ignored `backend/.env.local` file, load it in the same terminal before starting Uvicorn.
+
+```sh
+set -a
+source backend/.env.local
+set +a
+```
+
 In a patient drawer, **AI tahlilini olish** asks the model to review existing sample rule findings and measured changes. A newly red case requests this review in the background when its card opens. MehrAI accepts only valid references and keeps every finding visible. Only the sample cohort, risk band, rule findings, and allowlisted numerical changes are sent. The backend requires providers that support the requested parameters and have zero data retention and no data collection. Red findings appear immediately in their original order, independently of the optional agent review. A missing key, incompatible model, or provider failure falls back to the rules.
 
 This analyzer is for synthetic hackathon cases. The screening rules and workflow require clinical validation before any real-world use.

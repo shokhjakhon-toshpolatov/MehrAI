@@ -62,12 +62,37 @@
 .booking-heading h2{font-size:20px}
 .booking-dialog form,.booking-patient{display:grid;gap:10px}
 .booking-dialog form{margin-top:16px;font-size:12px;line-height:1.5}
-.booking-patient select{width:100%;padding:10px;border:1px solid #ccd9e7;border-radius:7px;background:#fff;color:#18334f}
+.booking-patient select,.booking-patient input{min-width:0;width:100%;padding:10px;border:1px solid #ccd9e7;border-radius:7px;background:#fff;color:#18334f}
 .booking-slot,.booking-review{display:grid;gap:4px;margin-top:10px;padding:12px;border-radius:8px;background:#eef5ff;font-size:12px}
 .booking-review{background:#fff6df}
 .booking-dialog .case-rationale{margin-top:0;padding:10px 0}
 .booking-dialog form>.button{justify-self:start;white-space:normal}
 .booking-error{color:#b91c35}
+.patient-overlay{align-items:center;justify-content:center;padding:14px}
+.patient-dialog{
+  width:min(580px,100%);
+  max-height:calc(100dvh - 28px);
+  padding:24px;
+  border-radius:14px;
+  box-shadow:0 24px 80px #18334f38;
+  animation:none;
+}
+.patient-dialog .drawer-top{margin-bottom:12px}
+.patient-dialog .drawer-intro{margin:4px 0 12px}
+.patient-dialog-status{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:11px;color:#526981}
+.patient-dialog .detail-block{margin-top:16px;padding:14px 0 0}
+.patient-dialog .detail-block h3{margin-bottom:8px;color:#4c627a}
+.patient-dialog .vital-cards{flex-wrap:wrap;margin:10px 0 0}
+.patient-dialog .vital-cards>div{padding:9px 11px}
+.patient-dialog .case-rationale details{margin:6px 0}
+.patient-dialog .case-rationale summary{cursor:pointer;color:#526981;font-size:11px}
+.booking-times{min-width:0;border:0;padding:0}
+.booking-times legend{margin-bottom:7px;font-weight:650}
+.booking-times>div{display:flex;flex-wrap:wrap;gap:7px}
+.booking-times .button[aria-pressed="true"]{border-color:#087ef0;background:#edf6ff;color:#075fb9}
+.booking-more{justify-self:start;color:#446684}
+.booking-more summary{cursor:pointer}
+.booking-more label{margin-top:8px}
 .facility-response button,.detail-block p+.button{margin-top:8px;justify-self:start}
 .patient-contact h3{display:flex;align-items:center;gap:6px}
 .patient-contact p,.detail-block>p{font-size:12px;color:#4c627a;margin-bottom:5px}
@@ -82,6 +107,26 @@
 .appointments-table + .workflow-empty{margin-top:16px}
 .case-rationale ul{padding-left:18px;line-height:1.6;margin:0 0 8px}
 .case-rationale button{display:flex;margin-top:9px}
-.demo-feed{margin-bottom:18px}
-.demo-feed-row{border-top:1px solid var(--line)}
+.demo-feed{margin-bottom:18px;border-color:#cadcf4;border-top:3px solid #087ef0}
+.demo-feed>.panel-heading{padding:17px 20px;background:#edf5ff;flex-wrap:wrap}
+.demo-feed .panel-heading h2{display:flex;align-items:center;gap:8px;color:#194a82;font-size:17px}
+.demo-feed .panel-heading p{color:#476c96;font-size:11px}
+.demo-feed .demo-feed-start{min-height:38px;padding:9px 15px}
+.demo-feed-empty{padding:20px;text-align:center;color:#526981;font-size:12px}
+.demo-feed-progress{display:flex;align-items:center;flex-wrap:wrap;gap:9px 12px;padding:12px 20px;font-size:11px;color:#45688f}
+.demo-feed-progress progress{width:118px;height:9px;accent-color:#087ef0}
+.demo-feed-events{max-height:440px;overflow:auto}
+.demo-feed-row{display:grid;gap:9px;padding:14px 20px;border-top:1px solid var(--line)}
+.demo-event-heading,.demo-event-review{display:flex;align-items:center;flex-wrap:wrap;gap:7px 12px}
+.demo-event-heading .patient-name{display:inline-flex;align-items:center;gap:4px;margin:0;font-size:12px;text-align:left}
+.demo-event-review{color:#405a76;font-size:11px}
+.demo-event-review .badge{font-size:10px}
+.demo-comparison{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:7px;margin:0}
+.demo-comparison>div{padding:8px 10px;border-radius:6px;background:#f2f6fb}
+.demo-comparison dt{font-weight:650;color:#34516c;font-size:10px}
+.demo-comparison dd{display:flex;flex-wrap:wrap;gap:3px 8px;margin:4px 0 0;color:#405a76;font-size:11px}
+.demo-measurement-changed{color:#075fb9;font-weight:700}
+.demo-analysis-spinner{width:10px;height:10px;border:2px solid #a9caef;border-top-color:#075fb9;border-radius:50%;animation:demo-analysis-spin .7s linear infinite}
+@keyframes demo-analysis-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.demo-analysis-spinner{animation:none}}
 .demo-stream-start{width:100%;margin-bottom:4px}

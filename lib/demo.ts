@@ -5,6 +5,8 @@ export type Patient = {
   doctor: string; status: string; time: string;
   statusCode?: string; deadline?: string; updatedAt?: string; appointmentAt?: string; referralStatus?: string; referralApprovedAt?: string; urgentOutreachApprovedAt?: string; previousZone?: Zone; previousVitals?: string[]; observationVersion?: string;
   motherId?: string; motherName?: string; followUpAt?: string; followUpCompletedAt?: string; assessedAt?: string; assessedBy?: string;
+  analysisEligible?: boolean;
+  riskEvidence?: string[];
 };
 export type Doctor = { id: string; name: string; specialty: string; initials: string; role: string };
 export const doctors: Doctor[] = [
@@ -26,4 +28,4 @@ export const seedPatients: Patient[] = [
   { id: 'P-1010', name: 'Malika Usmonova', age: 30, cohort: 'POSTPARTUM', stage: 'Tug‘ruqdan keyin 12 kun', clinic: 'OVaBMU markazi', zone: 'GREEN', reason: 'Klinik baholashda holat barqaror', assessedAt: '2026-11-17T11:00:00+05:00', assessedBy: 'rahimova', vitals: [], doctor: 'rahimova', status: 'Kuzatuv kutilmoqda', statusCode: 'POSTPARTUM_FOLLOW_UP', time: '19-noyabr' },
 
 ];
-export const zoneLabels: Record<Zone, string> = { RED: 'Yuqori xavf', YELLOW: 'Kuzatuv zarur', GREEN: 'Barqaror', REVIEW: 'Baholash kutilmoqda' };
+export const zoneLabels: Record<Zone, string> = { RED: 'Yuqori xavf', YELLOW: 'Kuzatuv zarur', GREEN: 'Barqaror', REVIEW: 'Klinik baho kerak' };

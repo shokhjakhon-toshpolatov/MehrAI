@@ -15,7 +15,8 @@ from fastapi import FastAPI, HTTPException, Header, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from .risk import evaluate
-from .explanations import explain_case
+from .explanations import analysis_eligible, explain_case, measured_changes
+from .risk_text import finding_text
 from .demo_stream import OBSERVATION_FEED, EVENT_INTERVAL_SECONDS, sample_contact
 from .seed import PATIENTS, DOCTORS, POSTPARTUM_SAMPLE_ASSESSMENTS
 
@@ -141,13 +142,22 @@ def ingest(db, patient_id, observation):
     duplicate = db.execute('SELECT case_id FROM idempotency WHERE key=?',(key,)).fetchone()
     if duplicate: return get(db,'Case',duplicate['case_id'])[0]
     prior = next((row for row in all_of(db, 'Case') if row['id'] == patient_id), None)
-    preserve_visit = (
+    preserve_urgent = (
+        prior and prior.get('appointment_id') and prior['risk_zone'] == risk['risk_zone'] == 'RED'
+        and prior.get('urgent_outreach_approved_at')
+        and prior.get('required_specialty') == risk['required_specialty']
+    )
+    preserve_visit = preserve_urgent or (
         prior and prior.get('appointment_id') and risk['risk_zone'] == 'YELLOW'
         and prior.get('required_specialty') == risk['required_specialty']
     )
+    created_at = stamp()
     for task in all_of(db, 'Call'):
         if task['case_id'] == patient_id and task['status'] in ('READY', 'QUEUED', 'NO_ANSWER', 'RESCHEDULE_REQUESTED', 'DEMO_CALL_QUEUED', 'DEMO_CALL_RUNNING'):
-            task['status'] = 'SUPERSEDED'
+            if preserve_urgent and task.get('appointment_id') == prior['appointment_id']:
+                task['case_version'] = created_at
+            else:
+                task['status'] = 'SUPERSEDED'
             put(db, 'Call', task['id'], task)
     if not preserve_visit:
         for appointment in all_of(db, 'Appointment'):
@@ -157,7 +167,7 @@ def ingest(db, patient_id, observation):
                 put(db, 'Appointment', appointment['id'], appointment, version + 1)
     put(db, 'Observation', oid, {**observation, 'id': oid, 'patient': patient_id})
     case = {'id':patient_id,'patient_id':patient_id,'cohort_type':patient['cohort_type'],**risk,
-            'observation':observation,'created_at':stamp(),'status':'ROUTINE','assigned_practitioner_id':None}
+            'observation':observation,'created_at':created_at,'status':'ROUTINE','assigned_practitioner_id':None}
     if prior:
         case['previous_risk_zone'] = prior['risk_zone']
         case['previous_observation'] = prior['observation']
@@ -171,7 +181,13 @@ def ingest(db, patient_id, observation):
             case['status'] = {
                 'RED': 'PENDING_DOCTOR_ACK', 'REVIEW': 'REVIEW_REQUIRED', 'YELLOW': 'REFERRAL_REVIEW',
             }[risk['risk_zone']]
-            if risk['risk_zone'] == 'RED':
+            if preserve_urgent:
+                for field in ('appointment_id', 'appointment_time', 'appointment_etag', 'status',
+                              'assigned_practitioner_id', 'accepted_at', 'urgent_outreach_approved_at',
+                              'urgent_outreach_approved_by'):
+                    if field in prior:
+                        case[field] = prior[field]
+            elif risk['risk_zone'] == 'RED':
                 case['escalation_deadline'] = stamp(now() + timedelta(minutes=15))
             elif risk['risk_zone'] == 'YELLOW':
                 case['referral_status'] = 'AWAITING_CLINICIAN'
@@ -216,6 +232,8 @@ def queue_call(db,case,observation_id='manual'):
         due=local.replace(hour=8,minute=30,second=0,microsecond=0)
         if due<local: due+=timedelta(days=1)
     call={'id':cid,'case_id':case['id'],'mode':'simulation','status':'QUEUED' if due>local else 'READY','scheduled_at':stamp(due), 'target_role':'RELATED_PERSON' if case['risk_zone']=='RED' else 'MOTHER_OF_NEWBORN' if case['cohort_type']=='NEONATAL' else 'PATIENT','attempts':0,'case_version':case['created_at'],'appointment_id':case.get('appointment_id')}
+    if case.get('appointment_time'):
+        call['appointment_start'] = case['appointment_time']
     put(db,'Call',cid,call)
     return call
 
@@ -255,11 +273,16 @@ def advance_demo_feed(db):
     index = len(run['events'])
     patient_id, changes = OBSERVATION_FEED[index]
     patient, _ = get(db, 'Patient', patient_id)
+    previous_event = next((item for item in reversed(run['events']) if item['patient_id'] == patient_id), None)
+    baseline = patient['observation']
+    previous = previous_event.get('observation', baseline) if previous_event else baseline
+    previous_zone = previous_event['zone'] if previous_event else evaluate(patient['cohort_type'], baseline)['risk_zone']
     event_id = f"{run['id']}-{index+1}"
     case = receive_mock_observation(db, {
         **patient['observation'], **changes,
         'resourceType': 'Observation', 'id': event_id, 'patient': f'Patient/{patient_id}',
     })
+    case.update(previous_observation=previous, previous_risk_zone=previous_zone)
     case['demo_analysis_id'] = event_id
     put(db, 'Case', case['id'], case)
     put(db, 'DemoAnalysis', event_id, {
@@ -268,6 +291,7 @@ def advance_demo_feed(db):
     run['events'].append({
         'id': event_id, 'patient_id': patient_id, 'patient_name': patient['name'],
         'previous_zone': case.get('previous_risk_zone'), 'zone': case['risk_zone'],
+        'previous_observation': previous, 'observation': case['observation'],
         'received_at': stamp(),
     })
     if len(run['events']) == len(OBSERVATION_FEED):
@@ -280,13 +304,22 @@ def advance_demo_feed(db):
 async def demo_analysis_worker():
     while True:
         with connect() as db:
-            pending = next((job for job in all_of(db, 'DemoAnalysis') if job['status'] == 'PENDING'), None)
+            pending = next((job for job in all_of(db, 'DemoAnalysis')
+                            if job['status'] in ('PENDING', 'RUNNING')), None)
             case = get(db, 'Case', pending['case_id'])[0] if pending else None
         if not pending:
             await asyncio.sleep(0.5)
             continue
         is_current = case.get('demo_analysis_id') == pending['id']
-        result = await asyncio.to_thread(explain_case, case) if is_current else None
+        using_model = (is_current and analysis_eligible(case, measured_changes(case))
+                       and bool(os.getenv('OPENROUTER_API_KEY', '').strip()))
+        if using_model:
+            with connect() as db:
+                pending['status'] = 'RUNNING'
+                put(db, 'DemoAnalysis', pending['id'], pending)
+            result, _ = await asyncio.gather(asyncio.to_thread(explain_case, case), asyncio.sleep(1.5))
+        else:
+            result = await asyncio.to_thread(explain_case, case) if is_current else None
         with connect() as db:
             db.execute('BEGIN IMMEDIATE')
             current, _ = get(db, 'Case', pending['case_id'])
@@ -328,6 +361,10 @@ def process_due(db):
                 continue
             case, _ = get(db, 'Case', call['case_id'])
             urgent = case['risk_zone'] == 'RED' and case.get('urgent_outreach_approved_at')
+            if urgent and call.get('appointment_id'):
+                visit, _ = get(db, 'Appointment', call['appointment_id'])
+                urgent = (case.get('appointment_id') == visit['id'] and case['status'] == 'DOCTOR_ACCEPTED'
+                          and visit['status'] == 'proposed' and datetime.fromisoformat(visit['start']) > now())
             planned = (
                 case['risk_zone'] == 'YELLOW' and case['status'] == 'VISIT_PROPOSED'
                 and case.get('referral_approved_at') and call.get('appointment_id') == case.get('appointment_id')
@@ -341,7 +378,9 @@ def process_due(db):
                 call['status'] = 'SUPERSEDED'
             elif status == 'DEMO_CALL_QUEUED':
                 call.update(status='DEMO_CALL_RUNNING', next_transition_at=stamp(now() + timedelta(seconds=3)))
-                audit(db, case['id'], 'demo_call_started', 'Simulated outreach started')
+                detail = (f"Simulated appointment reminder for {call['appointment_start']}"
+                          if call.get('appointment_start') else 'Simulated outreach started')
+                audit(db, case['id'], 'demo_call_started', detail)
             else:
                 call.update(status='DEMO_CALL_COMPLETE', attempts=1)
                 audit(db, case['id'], 'demo_call_completed', 'Simulation completed; no phone was dialed')
@@ -382,16 +421,23 @@ def registry():
         jobs = {job['id']: job for job in all_of(db, 'DemoAnalysis')}
         cases = all_of(db, 'Case')
         for case in cases:
+            case['analysis_eligible'] = analysis_eligible(case, measured_changes(case))
             job = jobs.get(case.get('demo_analysis_id'))
             if job:
-                case['demo_analysis'] = {'status': job['status'], 'result': job.get('result')}
+                result = job.get('result')
+                case['demo_analysis'] = {'status': job['status'], 'result': display_explanation(case, result) if result else None}
+            case['risk_evidence'] = [finding_text(reason, case['observation']) for reason in case['risk_reasons']]
+            case['risk_reasons'] = [finding_text(reason) for reason in case['risk_reasons']]
         runs = all_of(db, 'DemoRun')
         stream = runs[-1] if runs else None
         if stream:
             for event in stream['events']:
                 job = jobs[event['id']]
                 event['analysis_status'] = job['status']
-                event['analysis_source'] = (job.get('result') or {}).get('source')
+                result = job.get('result') or {}
+                event['analysis_source'] = result.get('source')
+                event['analysis_unavailable'] = bool(result.get('analyzer_status'))
+                event['analysis_reason'] = finding_text(result['reasons'][0], event.get('observation')) if result.get('reasons') else None
         doctors = all_of(db, 'PractitionerRole')
         visits = all_of(db, 'Appointment')
         return {
@@ -429,15 +475,19 @@ def simulate(scenario:str):
         obs.update({'systolic':165,'diastolic':110,'proteinuria':'++'} if pid=='p1' else {'bilirubin':295,'temperature':38.4})
         return ingest(db,pid,obs)
 
+def display_explanation(case, result):
+    return {**result, 'reasons': [finding_text(reason, case['observation']) for reason in result['reasons']]}
+
+
 @app.post('/api/cases/{case_id}/explanation')
 def case_explanation(case_id: str):
     with connect() as db:
         case, _ = get(db, 'Case', case_id)
         if case.get('demo_analysis_id'):
             job, _ = get(db, 'DemoAnalysis', case['demo_analysis_id'])
-            if job.get('result'):
-                return job['result']
-    return explain_case(case)
+            if (job.get('result') or {}).get('source') == 'openrouter':
+                return display_explanation(case, job['result'])
+    return display_explanation(case, explain_case(case))
 
 class ReferralApproval(BaseModel):
     practitioner_id: str
@@ -490,6 +540,53 @@ def require_planned_contact_approval(case):
         or case.get('referral_status') == 'RESCHEDULE_REQUESTED'
     ):
         raise HTTPException(409, 'Avval yo‘llanmani tasdiqlang va muassasa tashrifini qayd eting')
+
+class UrgentVisit(BaseModel):
+    practitioner_id: str
+    start: datetime
+
+
+@app.post('/api/cases/{case_id}/urgent-visit')
+def book_urgent_visit(case_id: str, booking: UrgentVisit):
+    if booking.start.utcoffset() is None:
+        raise HTTPException(422, 'Qabul vaqtining mintaqasi kerak')
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        case, _ = get(db, 'Case', case_id)
+        if (case['risk_zone'] != 'RED' or booking.practitioner_id != case.get('assigned_practitioner_id')):
+            raise HTTPException(409, 'Qizil holat uchun qabulni mas’ul shifokor belgilaydi')
+        if case.get('appointment_id'):
+            visit, _ = get(db, 'Appointment', case['appointment_id'])
+            if case['status'] == 'DOCTOR_ACCEPTED' and datetime.fromisoformat(visit['start']) == booking.start:
+                return visit
+            raise HTTPException(409, 'Qabul allaqachon belgilangan')
+        if case['status'] not in ('PENDING_DOCTOR_ACK', 'ESCALATED', 'DOCTOR_ACCEPTED'):
+            raise HTTPException(409, 'Joriy holat uchun qabul belgilab bo‘lmaydi')
+        if booking.start <= now():
+            raise HTTPException(422, 'Kelajakdagi qabul vaqtini tanlang')
+        if slot_occupied(all_of(db, 'Appointment'), booking.practitioner_id, booking.start):
+            raise HTTPException(409, 'Bu vaqt band. Boshqa vaqtni tanlang')
+        visit = {
+            'id': str(uuid4()), 'patient': case_id, 'practitioner': booking.practitioner_id,
+            'facility': 'OVaBMU markazi', 'mode': 'timed', 'source': 'facility',
+            'start': stamp(booking.start), 'status': 'proposed',
+        }
+        for task in all_of(db, 'Call'):
+            if task['case_id'] == case_id and task['status'] in ('DEMO_CALL_QUEUED', 'DEMO_CALL_RUNNING'):
+                task['status'] = 'SUPERSEDED'
+                put(db, 'Call', task['id'], task)
+        put(db, 'Appointment', visit['id'], visit)
+        saved_at = stamp()
+        case.update(status='DOCTOR_ACCEPTED', accepted_at=case.get('accepted_at') or saved_at,
+                    appointment_id=visit['id'], appointment_time=visit['start'], appointment_etag='W/"1"',
+                    urgent_outreach_approved_at=saved_at, urgent_outreach_approved_by=booking.practitioner_id)
+        put(db, 'Case', case_id, case)
+        call = queue_call(db, case, visit['id'])
+        call['target_role'] = 'MOTHER_OF_NEWBORN' if case['cohort_type'] == 'NEONATAL' else 'PATIENT'
+        schedule_demo_call(db, call)
+        audit(db, case_id, 'urgent_visit_booked', visit['start'], actor=booking.practitioner_id)
+        return visit
+
 
 @app.post('/api/cases/{case_id}/{action}')
 def case_action(case_id:str,action:str):

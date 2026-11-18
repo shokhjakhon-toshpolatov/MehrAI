@@ -10,6 +10,7 @@ export type Outreach = {
   simulated?: boolean;
   scheduledAt: string;
   appointmentId?: string;
+  appointmentStart?: string;
   attempts: number;
 };
 export type AuditEvent = {
@@ -38,7 +39,7 @@ export type AvailabilitySlot = {
   available: boolean;
 };
 export type DemoAnalysis = {
-  status: "PENDING" | "COMPLETE" | "SUPERSEDED";
+  status: "PENDING" | "RUNNING" | "COMPLETE" | "SUPERSEDED";
   result?: RiskExplanation | null;
 };
 export type DemoEvent = {
@@ -50,6 +51,10 @@ export type DemoEvent = {
   zone: Patient["zone"];
   analysis_status?: DemoAnalysis["status"];
   analysis_source?: RiskExplanation["source"];
+  analysis_unavailable?: boolean;
+  analysis_reason?: string;
+  previous_observation?: Observation;
+  observation?: Observation;
 };
 export type DemoStream = {
   id: string;
@@ -82,11 +87,13 @@ type ApiPatient = {
   clinic: string;
 };
 type ApiCase = {
+  analysis_eligible?: boolean;
   demo_analysis?: DemoAnalysis;
   id: string;
   patient_id: string;
   risk_zone: string;
   risk_reasons: string[];
+  risk_evidence?: string[];
   status: string;
   observation: Observation;
   assigned_practitioner_id: string | null;
@@ -112,6 +119,7 @@ type ApiCall = {
   status: string;
   scheduled_at: string;
   appointment_id?: string;
+  appointment_start?: string;
   attempts: number;
 };
 type ApiRegistry = {
@@ -243,7 +251,7 @@ function displayDate(value?: string): string {
     minute: "2-digit",
   }).format(date);
 }
-function observationVitals(o: Observation): string[] {
+export function observationVitals(o: Observation): string[] {
   const list: string[] = [];
   if (o.systolic != null && o.diastolic != null)
     list.push(`AQB ${o.systolic}/${o.diastolic} mmHg`);
@@ -310,6 +318,8 @@ export async function loadRegistry(): Promise<RegistryResult> {
       referralStatus: c.referral_status,
       referralApprovedAt: c.referral_approved_at,
       urgentOutreachApprovedAt: c.urgent_outreach_approved_at,
+      analysisEligible: c.analysis_eligible,
+      riskEvidence: c.risk_evidence ?? c.risk_reasons,
       previousZone: c.previous_risk_zone,
       observationVersion: c.created_at,
       previousVitals: c.previous_observation
@@ -339,6 +349,7 @@ export async function loadRegistry(): Promise<RegistryResult> {
     simulated: c.mode === "simulation",
     scheduledAt: c.scheduled_at,
     appointmentId: c.appointment_id,
+    appointmentStart: c.appointment_start,
     attempts: c.attempts,
   }));
   return {
@@ -423,11 +434,15 @@ export function explainRisk(caseId: string) {
   );
 }
 
-export function approveUrgentOutreach(caseId: string, practitionerId: string) {
+export function bookUrgentVisit(
+  caseId: string,
+  practitionerId: string,
+  start: string,
+) {
   return request(
-    `/api/cases/${encodeURIComponent(caseId)}/approve-urgent-outreach`,
+    `/api/cases/${encodeURIComponent(caseId)}/urgent-visit`,
     "POST",
-    { practitioner_id: practitionerId },
+    { practitioner_id: practitionerId, start },
   );
 }
 

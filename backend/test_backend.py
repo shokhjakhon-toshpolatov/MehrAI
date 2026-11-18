@@ -186,6 +186,16 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(explain_case(case)['analyzer_status'], 'not_configured')
             client.assert_not_called()
 
+    def test_registry_only_offers_model_review_when_there_is_reviewable_evidence(self):
+        from unittest.mock import patch
+        cases = {case['id']: case for case in self.client.get('/api/registry').json()['cases']}
+        self.assertFalse(cases['p1']['analysis_eligible'])
+        self.assertTrue(cases['p2']['analysis_eligible'])
+        self.assertFalse(cases['p3']['analysis_eligible'])
+        with patch('backend.explanations.httpx.Client') as client:
+            self.assertEqual(self.client.post('/api/cases/p1/explanation').json()['source'], 'rules')
+            client.assert_not_called()
+
     def test_red_change_requires_review_then_runs_one_simulated_call(self):
         from datetime import timedelta
         from unittest.mock import patch
@@ -215,6 +225,33 @@ class BackendTests(unittest.TestCase):
                 main.process_due(db)
                 self.assertEqual(main.get(db, 'Call', call_id)[0]['status'], 'DEMO_CALL_COMPLETE')
         self.assertFalse(self.client.get('/api/registry').json()['appointments'])
+
+    def test_urgent_visit_saves_clinician_time_and_queues_one_patient_reminder(self):
+        from datetime import datetime, timedelta
+        from unittest.mock import patch
+        case_id = 'p3'
+        start = main.stamp(main.now() + timedelta(hours=2))
+        path = f'/api/cases/{case_id}/urgent-visit'
+        self.assertEqual(self.client.post(path, json={'practitioner_id': 'd2', 'start': start}).status_code, 409)
+        request = {'practitioner_id': 'd1', 'start': start}
+        response = self.client.post(path, json=request)
+        self.assertEqual(response.status_code, 200, response.text)
+        visit = response.json()
+        self.assertEqual(self.client.post(path, json=request).json()['id'], visit['id'])
+        with main.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            call, = [task for task in main.all_of(db, 'Call') if task.get('appointment_id') == visit['id']]
+            self.assertEqual((call['target_role'], call['appointment_start']), ('PATIENT', start))
+            due = datetime.fromisoformat(call['next_transition_at'])
+            prior, _ = main.get(db, 'Case', case_id)
+            main.ingest(db, case_id, {**prior['observation'], 'id': 'urgent-repeat-observation'})
+            with patch.object(main, 'now', return_value=due):
+                main.process_due(db)
+                self.assertEqual(main.get(db, 'Call', call['id'])[0]['status'], 'DEMO_CALL_RUNNING')
+            with patch.object(main, 'now', return_value=due + timedelta(seconds=4)):
+                main.process_due(db)
+                self.assertEqual(main.get(db, 'Call', call['id'])[0]['status'], 'DEMO_CALL_COMPLETE')
+                self.assertEqual(main.get(db, 'Appointment', visit['id'])[0]['status'], 'proposed')
 
     def test_agent_reviews_measured_change_without_reclassifying_red(self):
         import json
@@ -261,6 +298,17 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(newborn['contact']['mother_name'], 'Nigora Nazarova')
         self.assertEqual(newborn['contact']['phone_display'], '+998 •• ••• •• ••')
         self.assertEqual(data['demo_stream']['events'][-1]['zone'], 'RED')
+        last = data['demo_stream']['events'][-1]
+        self.assertEqual(last['previous_observation']['bilirubin'], 238)
+        self.assertEqual(last['observation']['bilirubin'], 295)
+
+    def test_registry_display_explains_findings_in_uzbek_using_recorded_values(self):
+        cases = {case['id']: case for case in self.client.get('/api/registry').json()['cases']}
+        self.assertEqual(cases['p2']['risk_reasons'], ['Kamqonlik belgisi', 'Endokrinolog ko‘rigi kerak'])
+        self.assertEqual(cases['p2']['risk_evidence'], [
+            'Gemoglobin 94 g/L. Kamqonlik belgisi.',
+            'Glyukoza 5.8 mmol/L. Endokrinolog ko‘rigi kerak.',
+        ])
 
     def test_seed_and_routing(self):
         data=self.client.get('/api/registry').json()

@@ -6,7 +6,7 @@ OBSERVATION_FEED = (
     ('p2', {'hemoglobin': 89, 'glucose': 6.0}),
     ('p4', {'bilirubin': 295, 'temperature': 38.4}),
 )
-EVENT_INTERVAL_SECONDS = 3
+EVENT_INTERVAL_SECONDS = 4
 SAMPLE_PHONE = '+998 •• ••• •• ••'
 
 
