@@ -32,6 +32,7 @@ def connect():
         db.close()
 
 def put(db, kind, rid, payload, version=1):
+    if kind == 'Case': payload['updated_at'] = stamp()
     db.execute('INSERT OR REPLACE INTO resources VALUES(?,?,?,?)', (kind,rid,json.dumps(payload),version))
 
 def get(db, kind, rid):
@@ -41,6 +42,13 @@ def get(db, kind, rid):
 
 def all_of(db, kind):
     return [json.loads(r['payload']) for r in db.execute('SELECT payload FROM resources WHERE kind=? ORDER BY rowid',(kind,))]
+
+def audit(db, case_id, action, detail, actor='local-operator'):
+    event = {'id':str(uuid4()),'case_id':case_id,'action':action,'at':stamp(),
+             'actor':actor,'mode':'mock','detail':detail}
+    put(db,'AuditEvent',event['id'],event)
+    return event
+
 
 def init():
     with connect() as db:
@@ -152,11 +160,12 @@ async def lifespan(app):
     except asyncio.CancelledError: pass
 
 app=FastAPI(title='DMED Perinatal — synthetic integration simulator',lifespan=lifespan)
-app.add_middleware(CORSMiddleware,allow_origins=['http://localhost:3000','http://127.0.0.1:3000','http://localhost:5173'],allow_methods=['*'],allow_headers=['*'],expose_headers=['ETag'])
+CORS_ORIGINS = [origin.strip() for origin in os.getenv('CORS_ORIGINS','http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://localhost:8000,http://127.0.0.1:8000').split(',') if origin.strip()]
+app.add_middleware(CORSMiddleware,allow_origins=CORS_ORIGINS,allow_methods=['*'],allow_headers=['*'],expose_headers=['ETag'])
 
 @app.get('/api/registry')
 def registry():
-    with connect() as db: return {'mode':'mock','patients':all_of(db,'Patient'),'cases':all_of(db,'Case'),'doctors':all_of(db,'PractitionerRole'),'calls':all_of(db,'Call')}
+    with connect() as db: return {'mode':'mock','patients':all_of(db,'Patient'),'cases':all_of(db,'Case'),'doctors':all_of(db,'PractitionerRole'),'calls':all_of(db,'Call'),'audit':all_of(db,'AuditEvent')}
 
 @app.post('/api/simulate/{scenario}')
 def simulate(scenario:str):
@@ -173,12 +182,21 @@ def simulate(scenario:str):
 def case_action(case_id:str,action:str):
     with connect() as db:
         case,_=get(db,'Case',case_id)
-        if action=='busy': return escalate(db,case)
-        if action=='call': return queue_call(db,case)
+        if action=='busy':
+            if case['status']!='PENDING_DOCTOR_ACK': raise HTTPException(409,'Only a pending emergency can be handed over')
+            result=escalate(db,case)
+            audit(db,case_id,'busy','Case handed over; notification transport is simulated')
+            return result
+        if action=='call':
+            if case['risk_zone'] not in ('RED','YELLOW'): raise HTTPException(409,'Outreach requires an assessed red or yellow case')
+            result=queue_call(db,case)
+            audit(db,case_id,'call','Simulated outreach queued; no external call placed')
+            return result
         if action!='accept': raise HTTPException(404,'Unknown action')
         if case['status'] not in ('PENDING_DOCTOR_ACK','ESCALATED','APPOINTMENT_BOOKED','REVIEW_REQUIRED'): raise HTTPException(409,'Case cannot be accepted in current state')
         case.update(status='DOCTOR_ACCEPTED',accepted_at=stamp())
         put(db,'Case',case_id,case)
+        audit(db,case_id,'accept','Case acknowledgment recorded')
         return case
 
 class VoiceEvent(BaseModel):
@@ -250,3 +268,10 @@ def update_appointment(rid:str,payload:dict,response:Response,if_match:str|None=
         put(db,'Appointment',rid,updated,version+1)
         response.headers['ETag']=f'W/"{version+1}"'
         return updated
+
+
+# Mount last so API routes keep precedence; build the UI before starting the server.
+FRONTEND_OUTPUT = Path(__file__).resolve().parent.parent / 'out'
+if FRONTEND_OUTPUT.is_dir():
+    from fastapi.staticfiles import StaticFiles
+    app.mount('/', StaticFiles(directory=str(FRONTEND_OUTPUT), html=True), name='frontend')

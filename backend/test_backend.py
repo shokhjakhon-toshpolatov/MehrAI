@@ -124,4 +124,32 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(main.get(db,'Case','p3')[0]['assigned_practitioner_id'],'d2')
             self.assertEqual(main.get(db,'Call','due')[0]['status'],'READY')
 
+    def test_case_mutations_persist_and_audit(self):
+        self.assertEqual(self.client.post('/api/cases/p3/busy').status_code,200)
+        self.assertEqual(self.client.post('/api/cases/p3/accept').status_code,200)
+        self.assertEqual(self.client.post('/api/cases/p2/call').status_code,200)
+        registry=self.client.get('/api/registry').json()
+        case=next(c for c in registry['cases'] if c['id']=='p3')
+        self.assertEqual(case['status'],'DOCTOR_ACCEPTED')
+        self.assertEqual(case['assigned_practitioner_id'],'d2')
+        self.assertIn('updated_at',case)
+        self.assertEqual([e['action'] for e in registry['audit']],['busy','accept','call'])
+        with main.connect() as db:
+            self.assertEqual(main.get(db,'Case','p3')[0]['status'],'DOCTOR_ACCEPTED')
+            self.assertEqual(len(main.all_of(db,'AuditEvent')),3)
+        call=next(c for c in registry['calls'] if c['case_id']=='p2')
+        self.assertIn(call['status'],('QUEUED','READY'))
+        self.assertEqual(call['attempts'],0)
+        self.assertEqual(call['mode'],'simulation')
+    def test_rejected_actions_do_not_create_audit(self):
+        self.assertEqual(self.client.post('/api/cases/p1/call').status_code,409)
+        self.assertEqual(self.client.post('/api/cases/p2/busy').status_code,409)
+        self.assertEqual(self.client.post('/api/cases/p1/accept').status_code,409)
+        self.assertEqual(self.client.get('/api/registry').json()['audit'],[])
+    def test_cors_local_frontend(self):
+        r=self.client.options('/api/registry',headers={'Origin':'http://localhost:3000','Access-Control-Request-Method':'GET'})
+        self.assertEqual(r.headers.get('access-control-allow-origin'),'http://localhost:3000')
+        blocked=self.client.options('/api/registry',headers={'Origin':'https://unconfigured.example','Access-Control-Request-Method':'GET'})
+        self.assertEqual(blocked.status_code,400)
+
 if __name__=='__main__': unittest.main()
